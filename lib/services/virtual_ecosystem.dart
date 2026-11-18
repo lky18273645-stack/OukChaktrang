@@ -1,0 +1,931 @@
+// lib/services/virtual_ecosystem.dart
+//
+// Offline virtual player ecosystem for OukChaktrang.com:
+//  - 60+ persistent bots (Elo 400..3000+) with Khmer / international names
+//  - background bot-vs-bot simulation -> dynamic leaderboard
+//  - human-like thinking delays
+//  - BotGameBrain: resign (-700cp x3), draw offers (+-30cp x6 in endgames),
+//    draw-offer responses
+//  - Elo + game summary, clubs, achievements
+//  - 8 / 16 player Swiss and Arena tournaments (simulated offline)
+
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+String flagEmoji(String code) => String.fromCharCodes(
+    code.toUpperCase().codeUnits.map((c) => 0x1F1E6 + c - 0x41));
+
+double expectedScore(int a, int b) =>
+    1.0 / (1.0 + pow(10, (b - a) / 400.0));
+
+String formatDelta(int d) => d >= 0 ? '+$d' : '$d';
+
+// -----------------------------------------------------------------------------
+// Models
+// -----------------------------------------------------------------------------
+
+enum BotStyle { aggressive, solid, tricky, endgame }
+
+class BotPlayer {
+  final String id;
+  final String name;
+  final String countryCode;
+  final int avatar;
+  final BotStyle style;
+  final int clubId;
+  int elo;
+  int wins;
+  int losses;
+  int draws;
+
+  BotPlayer({
+    required this.id,
+    required this.name,
+    required this.countryCode,
+    required this.avatar,
+    required this.style,
+    required this.clubId,
+    required this.elo,
+    this.wins = 0,
+    this.losses = 0,
+    this.draws = 0,
+  });
+
+  String get flag => flagEmoji(countryCode);
+  int get games => wins + losses + draws;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'cc': countryCode,
+        'av': avatar,
+        'st': style.index,
+        'club': clubId,
+        'elo': elo,
+        'w': wins,
+        'l': losses,
+        'd': draws,
+      };
+
+  factory BotPlayer.fromJson(Map<String, dynamic> j) => BotPlayer(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        countryCode: j['cc'] as String,
+        avatar: j['av'] as int,
+        style: BotStyle.values[j['st'] as int],
+        clubId: j['club'] as int,
+        elo: j['elo'] as int,
+        wins: j['w'] as int,
+        losses: j['l'] as int,
+        draws: j['d'] as int,
+      );
+}
+
+class Club {
+  final int id;
+  final String nameKm;
+  final String nameEn;
+  int points;
+  Club(this.id, this.nameKm, this.nameEn, [this.points = 0]);
+
+  Map<String, dynamic> toJson() => {'id': id, 'p': points};
+}
+
+const List<List<String>> _clubDefs = [
+  ['ភ្នំពេញ', 'Phnom Penh Chess Club'],
+  ['សៀមរាប', 'Siem Reap Chess Club'],
+  ['បាត់ដំបង', 'Battambang Chess Club'],
+  ['កំពត', 'Kampot Chess Club'],
+  ['កំពង់ចាម', 'Kampong Cham Chess Club'],
+  ['ព្រះសីហនុ', 'Sihanoukville Chess Club'],
+];
+
+class AchievementDef {
+  final String id;
+  final String titleKm;
+  final String titleEn;
+  final String descEn;
+  const AchievementDef(this.id, this.titleKm, this.titleEn, this.descEn);
+}
+
+const List<AchievementDef> achievementDefs = [
+  AchievementDef('first_win', 'ជ័យជម្នះដំបូង', 'First Win', 'Win your first game.'),
+  AchievementDef('first_checkmate', 'ម៉ាតដំបូង', 'First Checkmate', 'Win by checkmate.'),
+  AchievementDef('streak_10', 'ឈ្នះ ១០ ជាប់គ្នា', '10-Game Win Streak', 'Win 10 games in a row.'),
+  AchievementDef('counting_master', 'ម្ចាស់គេចរាប់', 'Counting Escape Master', 'Draw by the counting rule 3 times.'),
+  AchievementDef('giant_killer', 'អ្នកផ្តួលយក្ស', 'Giant Killer', 'Beat a bot rated 200+ above you.'),
+  AchievementDef('bot_resign', 'គេចុះចាញ់', 'Forced Resignation', 'Make a bot resign.'),
+  AchievementDef('veteran_50', 'អ្នកចាស់ការ', 'Veteran', 'Play 50 games.'),
+  AchievementDef('club_member', 'សមាជិកក្លឹប', 'Club Member', 'Join a regional club.'),
+  AchievementDef('tournament_champion', 'ជើងឯកព្រឹត្តិការណ៍', 'Tournament Champion', 'Win a tournament.'),
+  AchievementDef('draw_diplomat', 'អ្នកការទូត', 'Draw Diplomat', 'Agree a draw with a bot.'),
+];
+
+class UserProfile {
+  String name;
+  String countryCode;
+  int elo;
+  int wins;
+  int losses;
+  int draws;
+  int streak;
+  int bestStreak;
+  int countingEscapes;
+  int clubId; // -1 = none
+  int trophies;
+  Set<String> achievements;
+
+  UserProfile({
+    this.name = 'Player',
+    this.countryCode = 'KH',
+    this.elo = 800,
+    this.wins = 0,
+    this.losses = 0,
+    this.draws = 0,
+    this.streak = 0,
+    this.bestStreak = 0,
+    this.countingEscapes = 0,
+    this.clubId = -1,
+    this.trophies = 0,
+    Set<String>? achievements,
+  }) : achievements = achievements ?? <String>{};
+
+  int get games => wins + losses + draws;
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'cc': countryCode,
+        'elo': elo,
+        'w': wins,
+        'l': losses,
+        'd': draws,
+        'streak': streak,
+        'best': bestStreak,
+        'ce': countingEscapes,
+        'club': clubId,
+        'tr': trophies,
+        'ach': achievements.toList(),
+      };
+
+  factory UserProfile.fromJson(Map<String, dynamic> j) => UserProfile(
+        name: j['name'] as String,
+        countryCode: j['cc'] as String,
+        elo: j['elo'] as int,
+        wins: j['w'] as int,
+        losses: j['l'] as int,
+        draws: j['d'] as int,
+        streak: j['streak'] as int,
+        bestStreak: j['best'] as int,
+        countingEscapes: j['ce'] as int,
+        clubId: j['club'] as int,
+        trophies: j['tr'] as int,
+        achievements: Set<String>.from(j['ach'] as List),
+      );
+}
+
+class LeaderboardEntry {
+  final String id;
+  final String name;
+  final String flag;
+  final int elo;
+  final int clubId;
+  final int games;
+  final bool isUser;
+  int rank = 0;
+  int trend = 0; // + moved up, - moved down since the last simulation
+  LeaderboardEntry(this.id, this.name, this.flag, this.elo, this.clubId,
+      this.games, this.isUser);
+}
+
+class GameSummary {
+  final double score; // 1 win, 0.5 draw, 0 loss (user's view)
+  final String reason;
+  final BotPlayer opponent;
+  final int eloBefore;
+  final int eloAfter;
+  final int delta;
+  final double accuracy;
+  final List<AchievementDef> newAchievements;
+
+  GameSummary(this.score, this.reason, this.opponent, this.eloBefore,
+      this.eloAfter, this.delta, this.accuracy, this.newAchievements);
+
+  bool get isWin => score == 1.0;
+  bool get isDraw => score == 0.5;
+
+  /// "1450 (+9)" style label, new rating first.
+  String get eloLabel => '$eloAfter (${formatDelta(delta)})';
+}
+
+// -----------------------------------------------------------------------------
+// Bot behaviour inside one game
+// -----------------------------------------------------------------------------
+
+enum BotAction { none, resign, offerDraw }
+
+class BotDecision {
+  final BotAction action;
+  final String? chat;
+  const BotDecision(this.action, [this.chat]);
+}
+
+class BotGameBrain {
+  final int elo;
+  final BotStyle style;
+  final Random _rng;
+
+  int _hopeless = 0; // consecutive bot turns with eval <= -700
+  int _equalEndgame = 0; // consecutive bot turns with |eval| <= 30 in an endgame
+  int _drawCooldown = 0;
+
+  BotGameBrain({required this.elo, this.style = BotStyle.solid, Random? rng})
+      : _rng = rng ?? Random();
+
+  static const int resignThreshold = -700;
+  static const int drawBand = 30;
+  static const int resignMoves = 3;
+  static const int drawMoves = 6;
+
+  /// Call after every bot move with the engine score from the BOT's view (cp).
+  BotDecision afterBotMove({required int evalCp, required bool isEndgame}) {
+    if (_drawCooldown > 0) _drawCooldown--;
+
+    // Resignation: only bots above 1000 Elo.
+    if (evalCp <= resignThreshold) {
+      _hopeless++;
+    } else {
+      _hopeless = 0;
+    }
+    if (elo > 1000 && _hopeless >= resignMoves) {
+      return const BotDecision(BotAction.resign, 'លេងល្អណាស់ ខ្ញុំសុំចុះចាញ់!');
+    }
+
+    // Draw offer in a balanced endgame.
+    if (isEndgame && evalCp.abs() <= drawBand) {
+      _equalEndgame++;
+    } else {
+      _equalEndgame = 0;
+    }
+    if (_equalEndgame >= drawMoves && _drawCooldown == 0) {
+      _equalEndgame = 0;
+      _drawCooldown = 12;
+      return const BotDecision(BotAction.offerDraw, 'ស្មើគ្នាទេ? 🤝');
+    }
+    return const BotDecision(BotAction.none);
+  }
+
+  /// Decide on a draw offer from the player. [evalCp] is from the BOT's view.
+  /// Returns the chat line and whether it accepts.
+  ({bool accept, String chat}) respondToDraw({
+    required int evalCp,
+    required bool isEndgame,
+    required int fullMove,
+    bool countingActive = false,
+  }) {
+    double p = 0.5 - evalCp / 400.0; // worse for the bot -> more willing
+    if (isEndgame && evalCp.abs() <= drawBand) p += 0.25;
+    if (countingActive && evalCp <= 50) p += 0.15;
+    if (fullMove < 15) p -= 0.35; // too early to draw
+    if (elo < 1000) p += (_rng.nextDouble() - 0.5) * 0.3; // weaker bots erratic
+    if (style == BotStyle.aggressive) p -= 0.1;
+    p = p.clamp(0.02, 0.95).toDouble();
+    final ok = _rng.nextDouble() < p;
+    return (
+      accept: ok,
+      chat: ok ? 'យល់ព្រម! ស្មើគ្នា 🤝' : 'សុំលេងបន្តសិន 😄',
+    );
+  }
+}
+
+/// Human-like thinking time. Fast intuitive moves (1-2 s), long pauses (4-12 s)
+/// in complex positions.
+Duration thinkingDelay({
+  required int legalMoveCount,
+  required int evalSwingCp, // |eval change| vs previous move, in cp
+  required int elo,
+  bool isOpening = false,
+  int clockMsLeft = 600000,
+  Random? rng,
+}) {
+  final r = rng ?? Random();
+  if (legalMoveCount <= 2) {
+    return Duration(milliseconds: 500 + r.nextInt(700));
+  }
+  double c = (legalMoveCount / 40.0).clamp(0.0, 1.0).toDouble() * 0.4 +
+      (evalSwingCp / 300.0).clamp(0.0, 1.0).toDouble() * 0.4 +
+      (isOpening ? 0.0 : 0.2);
+  if (isOpening) c *= 0.4;
+  final deep = r.nextDouble() < c;
+  int ms;
+  if (deep) {
+    final eloBoost = ((elo - 400) / 2600.0).clamp(0.0, 1.0).toDouble(); // 0..1
+    ms = 4000 + r.nextInt(5000) + (eloBoost * 3000).round(); // 4..12 s
+  } else {
+    ms = 1000 + r.nextInt(1000); // 1..2 s
+  }
+  if (clockMsLeft < 20000) ms = min(ms, 1500);
+  return Duration(milliseconds: ms.clamp(500, 12000).toInt());
+}
+
+// -----------------------------------------------------------------------------
+// Tournaments
+// -----------------------------------------------------------------------------
+
+enum TournamentFormat { swiss, arena }
+
+class TPlayer {
+  final String id; // bot id or 'user'
+  final String name;
+  final int elo;
+  final String flag;
+  final bool isUser;
+  double score = 0;
+  int streak = 0; // consecutive wins (arena doubling)
+  final List<String> opponents = [];
+  TPlayer(this.id, this.name, this.elo, this.flag, this.isUser);
+
+  Map<String, dynamic> toJson() => {
+        'id': id, 'n': name, 'e': elo, 'f': flag, 'u': isUser,
+        's': score, 'k': streak, 'o': opponents,
+      };
+
+  factory TPlayer.fromJson(Map<String, dynamic> j) {
+    final p = TPlayer(j['id'] as String, j['n'] as String, j['e'] as int,
+        j['f'] as String, j['u'] as bool);
+    p.score = (j['s'] as num).toDouble();
+    p.streak = j['k'] as int;
+    p.opponents.addAll(List<String>.from(j['o'] as List));
+    return p;
+  }
+}
+
+class Pairing {
+  final String whiteId;
+  final String blackId;
+  double? whiteScore; // 1 / 0.5 / 0 once played
+  Pairing(this.whiteId, this.blackId, [this.whiteScore]);
+
+  Map<String, dynamic> toJson() => {'w': whiteId, 'b': blackId, 's': whiteScore};
+  factory Pairing.fromJson(Map<String, dynamic> j) => Pairing(
+      j['w'] as String, j['b'] as String, (j['s'] as num?)?.toDouble());
+}
+
+class Tournament {
+  final String id;
+  final String name;
+  final TournamentFormat format;
+  final int size; // 8 or 16
+  final int totalRounds;
+  final List<TPlayer> players;
+  final List<List<Pairing>> rounds = [];
+  int currentRound = -1;
+  bool finished = false;
+  int userRank = 0;
+  int bonusElo = 0;
+  String? trophy; // gold / silver / bronze
+
+  Tournament(this.id, this.name, this.format, this.size, this.totalRounds,
+      this.players);
+
+  TPlayer player(String id) => players.firstWhere((p) => p.id == id);
+
+  /// Standings: score, then sum of opponents' Elo, then own Elo.
+  List<TPlayer> get standings {
+    double tb(TPlayer p) =>
+        p.opponents.fold<double>(0, (a, id) => a + player(id).elo);
+    final list = List<TPlayer>.from(players);
+    list.sort((a, b) {
+      final c = b.score.compareTo(a.score);
+      if (c != 0) return c;
+      final t = tb(b).compareTo(tb(a));
+      if (t != 0) return t;
+      return b.elo.compareTo(a.elo);
+    });
+    return list;
+  }
+
+  /// The user's pairing in the current round (null when finished).
+  Pairing? get userPairing {
+    if (finished || currentRound < 0) return null;
+    for (final p in rounds[currentRound]) {
+      if (p.whiteId == 'user' || p.blackId == 'user') return p;
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id, 'name': name, 'fmt': format.index, 'size': size,
+        'tr': totalRounds,
+        'players': players.map((e) => e.toJson()).toList(),
+        'rounds': rounds.map((r) => r.map((p) => p.toJson()).toList()).toList(),
+        'cur': currentRound, 'fin': finished, 'ur': userRank,
+        'bonus': bonusElo, 'trophy': trophy,
+      };
+
+  factory Tournament.fromJson(Map<String, dynamic> j) {
+    final t = Tournament(
+      j['id'] as String,
+      j['name'] as String,
+      TournamentFormat.values[j['fmt'] as int],
+      j['size'] as int,
+      j['tr'] as int,
+      (j['players'] as List)
+          .map((e) => TPlayer.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+    for (final r in j['rounds'] as List) {
+      t.rounds.add((r as List)
+          .map((e) => Pairing.fromJson(e as Map<String, dynamic>))
+          .toList());
+    }
+    t.currentRound = j['cur'] as int;
+    t.finished = j['fin'] as bool;
+    t.userRank = j['ur'] as int;
+    t.bonusElo = j['bonus'] as int;
+    t.trophy = j['trophy'] as String?;
+    return t;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// The ecosystem service
+// -----------------------------------------------------------------------------
+
+class VirtualEcosystem extends ChangeNotifier {
+  static const String _prefsKey = 'ouk_ecosystem_v1';
+
+  final Random _rng = Random();
+  final List<BotPlayer> bots;
+  final List<Club> clubs;
+  UserProfile user;
+  Tournament? activeTournament;
+  DateTime lastSim;
+  Map<String, int> _prevRank = {};
+
+  VirtualEcosystem._(
+      this.bots, this.clubs, this.user, this.activeTournament, this.lastSim);
+
+  // ---- creation / persistence ----------------------------------------------
+
+  static const List<String> _khmerNames = [
+    'Sokha', 'Dara', 'Vannak', 'Sreypich', 'Chantha', 'Rithy', 'Sophea',
+    'Bunthoeun', 'Kosal', 'Piseth', 'Veasna', 'Rotha', 'Sreyneang', 'Makara',
+    'Visal', 'Samnang', 'Chenda', 'Bopha', 'Sovann', 'Rathana', 'Vibol',
+    'Thida', 'Pheakdey', 'Narith', 'Kunthea', 'Monirom', 'Sambath',
+    'Channary', 'Vichea', 'Sopheak', 'Ratanak', 'Seyha',
+    'សុខា', 'ដារា', 'វិសាល', 'ស្រីនាង', 'មករា', 'ចន្ថា',
+  ];
+
+  static const List<List<String>> _intl = [
+    ['Alex', 'US'], ['Yuki', 'JP'], ['Wei', 'CN'], ['Minh', 'VN'],
+    ['Somchai', 'TH'], ['Arjun', 'IN'], ['Lukas', 'DE'], ['Pierre', 'FR'],
+    ['Ivan', 'RU'], ['Carlos', 'BR'], ['Hana', 'KR'], ['Aisha', 'MY'],
+    ['Sven', 'SE'], ['Marco', 'IT'], ['Elena', 'ES'], ['Kofi', 'GH'],
+    ['Liam', 'GB'], ['Noah', 'CA'], ['Chloe', 'AU'], ['Omar', 'EG'],
+    ['Dewi', 'ID'], ['Jose', 'PH'], ['Anya', 'PL'], ['Mehmet', 'TR'],
+  ];
+
+  static List<BotPlayer> _generateBots() {
+    final r = Random(42); // deterministic roster
+    final roster = <List<String>>[
+      for (final n in _khmerNames) ['${n}_KH', 'KH'],
+      for (final p in _intl) ['${p[0]}_${p[1]}', p[1]],
+    ];
+    roster.shuffle(r);
+    final n = roster.length;
+    final out = <BotPlayer>[];
+    for (int i = 0; i < n; i++) {
+      final t = i / (n - 1);
+      final elo = (400 + pow(t, 1.15) * 2700 + r.nextInt(41) - 20).round();
+      out.add(BotPlayer(
+        id: 'bot_$i',
+        name: roster[i][0],
+        countryCode: roster[i][1],
+        avatar: r.nextInt(24),
+        style: BotStyle.values[r.nextInt(BotStyle.values.length)],
+        clubId: roster[i][1] == 'KH' ? r.nextInt(_clubDefs.length) : -1,
+        elo: elo,
+      ));
+    }
+    return out;
+  }
+
+  static List<Club> _freshClubs() => [
+        for (int i = 0; i < _clubDefs.length; i++)
+          Club(i, _clubDefs[i][0], _clubDefs[i][1]),
+      ];
+
+  static Future<VirtualEcosystem> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefsKey);
+    VirtualEcosystem eco;
+    if (raw == null) {
+      eco = VirtualEcosystem._(_generateBots(), _freshClubs(), UserProfile(),
+          null, DateTime.now());
+      eco.simulateBackgroundMatches(rounds: 20); // warm-up so ranks look alive
+    } else {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      final clubs = _freshClubs();
+      for (final c in j['clubs'] as List) {
+        final m = c as Map<String, dynamic>;
+        clubs[m['id'] as int].points = m['p'] as int;
+      }
+      eco = VirtualEcosystem._(
+        (j['bots'] as List)
+            .map((e) => BotPlayer.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        clubs,
+        UserProfile.fromJson(j['user'] as Map<String, dynamic>),
+        j['tour'] == null
+            ? null
+            : Tournament.fromJson(j['tour'] as Map<String, dynamic>),
+        DateTime.fromMillisecondsSinceEpoch(j['last'] as int),
+      );
+    }
+    await eco.save();
+    return eco;
+  }
+
+  Future<void> save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        _prefsKey,
+        jsonEncode({
+          'bots': bots.map((b) => b.toJson()).toList(),
+          'clubs': clubs.map((c) => c.toJson()).toList(),
+          'user': user.toJson(),
+          'tour': activeTournament?.toJson(),
+          'last': lastSim.millisecondsSinceEpoch,
+        }));
+  }
+
+  // ---- background bot-vs-bot simulation ------------------------------------
+
+  /// Call when the app opens: simulates catch-up rounds for the time away.
+  Future<void> onAppOpen() async {
+    final hours = DateTime.now().difference(lastSim).inMinutes / 60.0;
+    final rounds = (3 + hours * 2).round().clamp(3, 30).toInt();
+    simulateBackgroundMatches(rounds: rounds);
+    await save();
+  }
+
+  /// Call after the user finishes a game.
+  Future<void> onGameFinished() async {
+    simulateBackgroundMatches(rounds: 2);
+    await save();
+  }
+
+  BotPlayer botById(String id) => bots.firstWhere((b) => b.id == id);
+
+  void _snapshotRanks() {
+    _prevRank = {for (final e in leaderboard()) e.id: e.rank};
+  }
+
+  /// One round = every bot plays one rated game against a similar-rated bot.
+  void simulateBackgroundMatches({int rounds = 5}) {
+    _snapshotRanks();
+    for (int i = 0; i < rounds; i++) {
+      final order = List<BotPlayer>.from(bots)
+        ..sort((a, b) => (a.elo + _rng.nextInt(160))
+            .compareTo(b.elo + _rng.nextInt(160)));
+      for (int j = 0; j + 1 < order.length; j += 2) {
+        _playBotGame(order[j], order[j + 1]);
+      }
+    }
+    lastSim = DateTime.now();
+    notifyListeners();
+  }
+
+  /// Returns the score of [a] (1 / 0.5 / 0) and updates both bots' Elo.
+  double _playBotGame(BotPlayer a, BotPlayer b) {
+    final ea = expectedScore(a.elo, b.elo);
+    final gap = (a.elo - b.elo).abs();
+    final avg = (a.elo + b.elo) / 2;
+    final drawP = (0.10 + 0.22 * (1 - (gap / 800).clamp(0.0, 1.0)) +
+            (avg - 1200) / 8000)
+        .clamp(0.05, 0.40);
+    final winA = ((ea - drawP / 2) / (1 - drawP)).clamp(0.02, 0.98);
+    final u = _rng.nextDouble();
+    double sa;
+    if (u < drawP) {
+      sa = 0.5;
+      a.draws++;
+      b.draws++;
+    } else if (_rng.nextDouble() < winA) {
+      sa = 1.0;
+      a.wins++;
+      b.losses++;
+    } else {
+      sa = 0.0;
+      a.losses++;
+      b.wins++;
+    }
+    final ka = a.elo >= 2400 ? 16 : 24;
+    final kb = b.elo >= 2400 ? 16 : 24;
+    final da = (ka * (sa - ea)).round();
+    final db = (kb * ((1 - sa) - (1 - ea))).round();
+    a.elo = (a.elo + da).clamp(300, 3300).toInt();
+    b.elo = (b.elo + db).clamp(300, 3300).toInt();
+    _clubGain(a, da);
+    _clubGain(b, db);
+    return sa;
+  }
+
+  void _clubGain(BotPlayer b, int delta) {
+    if (b.clubId >= 0 && delta > 0) clubs[b.clubId].points += delta;
+  }
+
+  // ---- leaderboard -----------------------------------------------------------
+
+  List<LeaderboardEntry> leaderboard({int? clubId, int? limit}) {
+    final all = <LeaderboardEntry>[
+      for (final b in bots)
+        LeaderboardEntry(b.id, b.name, b.flag, b.elo, b.clubId, b.games, false),
+      LeaderboardEntry('user', user.name, flagEmoji(user.countryCode),
+          user.elo, user.clubId, user.games, true),
+    ];
+    all.sort((a, b) => b.elo.compareTo(a.elo));
+    for (int i = 0; i < all.length; i++) {
+      all[i].rank = i + 1;
+      all[i].trend = (_prevRank[all[i].id] ?? all[i].rank) - all[i].rank;
+    }
+    var res = clubId == null ? all : all.where((e) => e.clubId == clubId).toList();
+    if (limit != null && res.length > limit) res = res.sublist(0, limit);
+    return res;
+  }
+
+  int get userRank => leaderboard().firstWhere((e) => e.isUser).rank;
+
+  List<Club> clubRanking() =>
+      List<Club>.from(clubs)..sort((a, b) => b.points.compareTo(a.points));
+
+  // ---- opponents --------------------------------------------------------------
+
+  /// Random bot near [targetElo] (defaults to the user's rating).
+  BotPlayer pickOpponent({int? targetElo, int spread = 150}) {
+    final t = targetElo ?? user.elo;
+    final near = bots.where((b) => (b.elo - t).abs() <= spread).toList();
+    if (near.isNotEmpty) return near[_rng.nextInt(near.length)];
+    final sorted = List<BotPlayer>.from(bots)
+      ..sort((a, b) => (a.elo - t).abs().compareTo((b.elo - t).abs()));
+    return sorted.first;
+  }
+
+  BotGameBrain brainFor(BotPlayer bot) =>
+      BotGameBrain(elo: bot.elo, style: bot.style, rng: _rng);
+
+  // ---- recording the user's game ---------------------------------------------
+
+  /// [score]: 1 win, 0.5 draw, 0 loss. [reason]: 'checkmate', 'resign',
+  /// 'timeout', 'stalemate', 'counting', 'agreement', 'bot_resign' ...
+  GameSummary recordUserGame({
+    required BotPlayer opponent,
+    required double score,
+    required String reason,
+    double accuracy = 0,
+    bool wasCountingEscape = false,
+  }) {
+    final before = user.elo;
+    final exp = expectedScore(user.elo, opponent.elo);
+    final k = user.games < 20 ? 40 : (user.elo < 2300 ? 24 : 16);
+    var delta = (k * (score - exp)).round();
+    if (score == 1.0 && delta < 1) delta = 1;
+    if (score == 0.0 && delta > -1) delta = -1;
+    user.elo = max(100, user.elo + delta);
+    final applied = user.elo - before;
+
+    // opponent mirrors (bots keep a floor)
+    opponent.elo = (opponent.elo - applied).clamp(300, 3300).toInt();
+    if (score == 1.0) {
+      user.wins++;
+      opponent.losses++;
+      user.streak++;
+      user.bestStreak = max(user.bestStreak, user.streak);
+    } else if (score == 0.0) {
+      user.losses++;
+      opponent.wins++;
+      user.streak = 0;
+    } else {
+      user.draws++;
+      opponent.draws++;
+      user.streak = 0;
+    }
+    if (wasCountingEscape && score == 0.5 && reason == 'counting') {
+      user.countingEscapes++;
+    }
+    if (user.clubId >= 0 && applied > 0) clubs[user.clubId].points += applied;
+
+    final unlocked = <AchievementDef>[];
+    void unlock(String id) {
+      if (user.achievements.add(id)) {
+        unlocked.add(achievementDefs.firstWhere((a) => a.id == id));
+      }
+    }
+
+    if (score == 1.0) unlock('first_win');
+    if (score == 1.0 && reason == 'checkmate') unlock('first_checkmate');
+    if (score == 1.0 && reason == 'bot_resign') unlock('bot_resign');
+    if (score == 1.0 && opponent.elo + applied >= before + 200) unlock('giant_killer');
+    if (user.streak >= 10) unlock('streak_10');
+    if (user.countingEscapes >= 3) unlock('counting_master');
+    if (user.games >= 50) unlock('veteran_50');
+    if (score == 0.5 && reason == 'agreement') unlock('draw_diplomat');
+
+    notifyListeners();
+    save();
+    return GameSummary(score, reason, opponent, before, user.elo, applied,
+        accuracy, unlocked);
+  }
+
+  // ---- clubs -------------------------------------------------------------------
+
+  void joinClub(int clubId) {
+    user.clubId = clubId;
+    if (user.achievements.add('club_member')) {
+      // surfaced via achievementsUnlockedNow if UI wants a toast
+    }
+    notifyListeners();
+    save();
+  }
+
+  void leaveClub() {
+    user.clubId = -1;
+    notifyListeners();
+    save();
+  }
+
+  // ---- tournaments ---------------------------------------------------------------
+
+  /// Creates a Swiss or Arena tournament (size 8 or 16) and starts round 1.
+  Tournament createTournament(
+      {required TournamentFormat format, int size = 8}) {
+    assert(size == 8 || size == 16);
+    final pool = List<BotPlayer>.from(bots)
+      ..sort((a, b) => (a.elo - user.elo).abs().compareTo((b.elo - user.elo).abs()));
+    final candidates = pool.take(size * 2).toList()..shuffle(_rng);
+    final chosen = candidates.take(size - 1).toList();
+    final players = <TPlayer>[
+      TPlayer('user', user.name, user.elo, flagEmoji(user.countryCode), true),
+      for (final b in chosen) TPlayer(b.id, b.name, b.elo, b.flag, false),
+    ];
+    final rounds = format == TournamentFormat.swiss
+        ? (size == 8 ? 3 : 4)
+        : (size == 8 ? 5 : 6);
+    final label = format == TournamentFormat.swiss ? 'Swiss' : 'Arena';
+    final t = Tournament(
+      'tour_${DateTime.now().millisecondsSinceEpoch}',
+      '$label $size',
+      format,
+      size,
+      rounds,
+      players,
+    );
+    activeTournament = t;
+    _startNextRound(t);
+    notifyListeners();
+    save();
+    return t;
+  }
+
+  void _startNextRound(Tournament t) {
+    t.currentRound++;
+    final sorted = List<TPlayer>.from(t.players)
+      ..sort((a, b) {
+        final c = b.score.compareTo(a.score);
+        return c != 0 ? c : b.elo.compareTo(a.elo);
+      });
+    final used = <String>{};
+    final pairs = <Pairing>[];
+    for (final p in sorted) {
+      if (used.contains(p.id)) continue;
+      TPlayer? opp;
+      for (final q in sorted) {
+        if (q.id == p.id || used.contains(q.id)) continue;
+        if (!p.opponents.contains(q.id)) {
+          opp = q;
+          break;
+        }
+      }
+      // everyone met already (small fields): allow a rematch
+      opp ??= sorted.firstWhere((q) => q.id != p.id && !used.contains(q.id));
+      used..add(p.id)..add(opp.id);
+      final whiteFirst = t.currentRound.isEven == (p.id.hashCode.isEven);
+      pairs.add(whiteFirst ? Pairing(p.id, opp.id) : Pairing(opp.id, p.id));
+    }
+    t.rounds.add(pairs);
+  }
+
+  /// Report the result of the user's tournament game (1 win, 0.5 draw, 0 loss).
+  /// Other boards are simulated, scores applied, and the next round is created
+  /// (or the tournament is finalised). Call [recordUserGame] separately for the
+  /// rated game itself.
+  Tournament reportUserResult(double userScore) {
+    final t = activeTournament!;
+    final round = t.rounds[t.currentRound];
+    for (final p in round) {
+      if (p.whiteScore != null) continue;
+      if (p.whiteId == 'user') {
+        p.whiteScore = userScore;
+      } else if (p.blackId == 'user') {
+        p.whiteScore = 1.0 - userScore;
+      } else {
+        p.whiteScore = _playBotGame(botById(p.whiteId), botById(p.blackId));
+      }
+    }
+    _applyRoundScores(t, round);
+    if (t.currentRound + 1 >= t.totalRounds) {
+      _finishTournament(t);
+    } else {
+      _startNextRound(t);
+    }
+    notifyListeners();
+    save();
+    return t;
+  }
+
+  void _applyRoundScores(Tournament t, List<Pairing> round) {
+    for (final p in round) {
+      final w = t.player(p.whiteId);
+      final b = t.player(p.blackId);
+      final ws = p.whiteScore!;
+      w.opponents.add(b.id);
+      b.opponents.add(w.id);
+      _award(t.format, w, ws);
+      _award(t.format, b, 1.0 - ws);
+    }
+  }
+
+  void _award(TournamentFormat f, TPlayer p, double s) {
+    if (f == TournamentFormat.swiss) {
+      p.score += s;
+      return;
+    }
+    // Arena: win 2 (4 on a 2+ win streak), draw 1, loss 0.
+    if (s == 1.0) {
+      p.score += p.streak >= 2 ? 4 : 2;
+      p.streak++;
+    } else if (s == 0.5) {
+      p.score += 1;
+      p.streak = 0;
+    } else {
+      p.streak = 0;
+    }
+  }
+
+  void _finishTournament(Tournament t) {
+    t.finished = true;
+    final st = t.standings;
+    t.userRank = st.indexWhere((p) => p.isUser) + 1;
+    final big = t.size == 16;
+    const names = ['gold', 'silver', 'bronze'];
+    final bonus = [big ? 18 : 12, big ? 12 : 8, big ? 7 : 4];
+    if (t.userRank >= 1 && t.userRank <= 3) {
+      t.trophy = names[t.userRank - 1];
+      t.bonusElo = bonus[t.userRank - 1];
+      user.elo += t.bonusElo;
+      user.trophies++;
+      if (user.clubId >= 0) clubs[user.clubId].points += t.bonusElo;
+    }
+    if (t.userRank == 1) user.achievements.add('tournament_champion');
+  }
+
+  /// Leave the tournament: remaining rounds are simulated without the user.
+  void abandonTournament() {
+    final t = activeTournament;
+    if (t == null || t.finished) return;
+    while (!t.finished) {
+      final round = t.rounds[t.currentRound];
+      for (final p in round) {
+        if (p.whiteScore != null) continue;
+        if (p.whiteId == 'user') {
+          p.whiteScore = 0.0;
+        } else if (p.blackId == 'user') {
+          p.whiteScore = 1.0;
+        } else {
+          p.whiteScore = _playBotGame(botById(p.whiteId), botById(p.blackId));
+        }
+      }
+      _applyRoundScores(t, round);
+      if (t.currentRound + 1 >= t.totalRounds) {
+        _finishTournament(t);
+      } else {
+        _startNextRound(t);
+      }
+    }
+    notifyListeners();
+    save();
+  }
+
+  void clearTournament() {
+    activeTournament = null;
+    notifyListeners();
+    save();
+  }
+}

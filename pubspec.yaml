@@ -1,0 +1,34 @@
+name: ouk_chaktrang
+description: OukChaktrang.com - offline Cambodian chess (Ouk Chaktrang) with Fairy-Stockfish.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  intl: any
+  provider: ^6.1.2
+  shared_preferences: ^2.3.2
+  path_provider: ^2.1.4
+  audioplayers: ^6.1.0
+  collection: ^1.18.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  generate: false
+  assets:
+    - assets/nnue/
+    - assets/sounds/
+    - assets/pieces/
+    - assets/data/

@@ -1,0 +1,107 @@
+name: Build OukChaktrang APK
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # 1) Fairy-Stockfish -> Android arm64-v8a executable (NDK clang)
+      - name: Build Fairy-Stockfish (arm64-v8a)
+        run: |
+          set -euxo pipefail
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          test -d "$NDK"
+          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          git clone --depth 1 https://github.com/fairy-stockfish/Fairy-Stockfish.git
+          cd Fairy-Stockfish/src
+          make -j"$(nproc)" build ARCH=armv8 COMP=ndk
+          llvm-strip stockfish || true
+          file stockfish
+          mkdir -p "$GITHUB_WORKSPACE/engine_out"
+          cp stockfish "$GITHUB_WORKSPACE/engine_out/libfairystockfish.so"
+
+      # 2) Generate android/ scaffolding but keep our own lib/ and pubspec.yaml
+      - name: Create Android scaffolding
+        run: |
+          set -euxo pipefail
+          cp pubspec.yaml /tmp/pubspec.yaml.bak
+          cp -r lib /tmp/lib.bak
+          flutter create . --org com.oukchaktrang --project-name ouk_chaktrang --platforms=android
+          cp /tmp/pubspec.yaml.bak pubspec.yaml
+          rm -rf lib && cp -r /tmp/lib.bak lib
+          rm -rf test
+
+      # 3) Native packaging: extract .so files so the engine can be executed
+      - name: Patch Gradle + install engine + MainActivity
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import pathlib, re
+          for name in ("android/app/build.gradle.kts", "android/app/build.gradle"):
+              p = pathlib.Path(name)
+              if p.exists():
+                  s = p.read_text()
+                  if "useLegacyPackaging" not in s:
+                      s = re.sub(r"android\s*\{", "android {\n    packaging { jniLibs { useLegacyPackaging = true } }", s, count=1)
+                      p.write_text(s)
+                  print("patched", name)
+          PY
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp engine_out/libfairystockfish.so android/app/src/main/jniLibs/arm64-v8a/
+          KDIR=android/app/src/main/kotlin/com/oukchaktrang/ouk_chaktrang
+          mkdir -p "$KDIR"
+          cp android_overrides/MainActivity.kt "$KDIR/MainActivity.kt"
+
+      # 4) cambodian.nnue: commit it to assets/nnue/ OR set repo variable CAMBODIAN_NNUE_URL
+      - name: Fetch cambodian.nnue (optional)
+        env:
+          NNUE_URL: ${{ vars.CAMBODIAN_NNUE_URL }}
+        run: |
+          mkdir -p assets/nnue
+          if [ -f assets/nnue/cambodian.nnue ]; then
+            echo "Using committed cambodian.nnue"
+          elif [ -n "${NNUE_URL:-}" ]; then
+            curl -fL "$NNUE_URL" -o assets/nnue/cambodian.nnue
+          else
+            echo "No NNUE supplied: engine will use classical evaluation"
+          fi
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build release APK (arm64)
+        run: |
+          flutter build apk --release --target-platform android-arm64
+          cp build/app/outputs/flutter-apk/app-release.apk app-release.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: app-release.apk
+
+      - name: Attach APK to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app-release.apk
