@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../services/virtual_ecosystem.dart';
 import 'app_state.dart';
+import '../screens/pgn_import_screen.dart';
 import 'game_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -149,6 +150,16 @@ class _HomeScreenState extends State<HomeScreen> {
             widget.eco.pickOpponent(targetElo: _oppElo.round(), spread: 120)),
         icon: const Icon(Icons.smart_toy_outlined),
         label: Text(t('លេងជាមួយ bot នេះ', 'Play this level')),
+      ),
+      const SizedBox(height: 22),
+      OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(padding: const EdgeInsets.all(14)),
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const PgnImportScreen()),
+        ),
+        icon: const Icon(Icons.analytics_outlined),
+        label: Text(t('នាំចូល PGN ហើយវិភាគ', 'Import PGN & analyse')),
       ),
     ]);
   }

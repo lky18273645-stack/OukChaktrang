@@ -6,8 +6,11 @@ import 'package:flutter/material.dart';
 
 import '../engine/fairy_engine.dart';
 import '../engine/ouk_rules.dart';
+import '../screens/game_review_screen.dart';
+import '../services/game_analyzer.dart';
 import '../services/virtual_ecosystem.dart';
 import 'app_state.dart';
+import '../widgets/ouk_board_widget.dart';
 import 'board_view.dart';
 
 class GameScreen extends StatefulWidget {
@@ -137,6 +140,45 @@ class _GameScreenState extends State<GameScreen> {
       _tapForPremove(sq, mine);
     }
     setState(() {});
+  }
+
+  // ---- drag & drop (tap-to-move still works)
+  bool _canDrag(int sq) {
+    if (_over) return false;
+    final p = pos.pieceAt(sq);
+    return p != 0 && p.sign == _userSide.sign;
+  }
+
+  void _onDragStart(int sq) {
+    if (_over) return;
+    _arrows.clear();
+    setState(() {
+      if (pos.turn == _userSide && !_thinking) {
+        _select(sq);
+      } else {
+        _selected = sq; // premove source
+        _targets = {};
+      }
+    });
+  }
+
+  void _onDragMove(int from, int to) {
+    if (_over) return;
+    if (pos.turn == _userSide && !_thinking) {
+      final c = pos.legalMovesFrom(from).where((m) => m.to == to).toList();
+      if (c.isNotEmpty) {
+        _playUser(c.first);
+        setState(() {});
+        return;
+      }
+      setState(() => _select(from)); // illegal drop: keep it selected
+    } else {
+      setState(() {
+        _premove = Move(from, to);
+        _selected = null;
+        _targets = {};
+      });
+    }
   }
 
   void _select(int sq) {
@@ -460,6 +502,22 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  GameRecord _record(GameSummary s) {
+    final me = widget.eco.user.name;
+    final white = _userSide == Side.white ? me : bot.name;
+    final black = _userSide == Side.black ? me : bot.name;
+    final whiteWon = s.isWin == (_userSide == Side.white);
+    final result = s.isDraw ? '1/2-1/2' : (whiteWon ? '1-0' : '0-1');
+    return GameRecord(
+      startFen: OukPosition.startFen,
+      moves: _moves.map((m) => m.uci).toList(),
+      whiteName: white,
+      blackName: black,
+      result: result,
+      userIsWhite: _userSide == Side.white,
+    );
+  }
+
   void _showSummary(GameSummary s) {
     final Color banner = s.isWin
         ? const Color(0xFF2E7D32)
@@ -521,6 +579,23 @@ class _GameScreenState extends State<GameScreen> {
                     style: const TextStyle(fontWeight: FontWeight.w600)),
               ),
             const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () {
+                  Navigator.pop(dctx);
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => GameReviewScreen(record: _record(s)),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.analytics_outlined),
+                label: Text(t('វិភាគអុកចត្រង្គខ្មែរ', 'Game review')),
+              ),
+            ),
+            const SizedBox(height: 8),
             Row(children: [
               Expanded(
                 child: OutlinedButton(
@@ -628,10 +703,15 @@ class _GameScreenState extends State<GameScreen> {
                 style: const TextStyle(fontWeight: FontWeight.w600)),
             Row(children: [
               Flexible(
-                child: Text(
-                  captured.map((p) => pieceGlyph(p)).join(),
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 14, height: 1.1),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    for (final p in captured)
+                      Align(
+                        widthFactor: 0.62,
+                        child: PieceImage(piece: side.opp.sign * p, size: 22),
+                      ),
+                  ]),
                 ),
               ),
               if (adv > 0)
@@ -695,7 +775,7 @@ class _GameScreenState extends State<GameScreen> {
             color: botColor,
             side: _botSide,
           ),
-          BoardView(
+          OukBoardWidget(
             pos: pos,
             flipped: flipped,
             selected: _selected,
@@ -704,6 +784,9 @@ class _GameScreenState extends State<GameScreen> {
             premove: _premove,
             arrows: _arrows,
             onTap: _onTap,
+            canDrag: _canDrag,
+            onDragStart: _onDragStart,
+            onDragMove: _onDragMove,
             onArrow: (a) => setState(() {
               final i = _arrows.indexWhere((x) => x.from == a.from && x.to == a.to);
               if (i >= 0) {

@@ -8,7 +8,8 @@ import 'app_state.dart';
 class Arrow {
   final int from;
   final int to;
-  const Arrow(this.from, this.to);
+  final Color? color;
+  const Arrow(this.from, this.to, [this.color]);
 }
 
 String pieceGlyph(int type) {
@@ -73,6 +74,9 @@ class BoardView extends StatefulWidget {
   final List<Arrow> arrows;
   final void Function(int sq) onTap;
   final void Function(Arrow arrow) onArrow;
+  final int? badgeSquare; // move-classification badge (game review)
+  final String? badgeText;
+  final Color? badgeColor;
 
   const BoardView({
     super.key,
@@ -85,6 +89,9 @@ class BoardView extends StatefulWidget {
     required this.arrows,
     required this.onTap,
     required this.onArrow,
+    this.badgeSquare,
+    this.badgeText,
+    this.badgeColor,
   });
 
   @override
@@ -176,7 +183,8 @@ class _BoardViewState extends State<BoardView> {
             IgnorePointer(
               child: CustomPaint(
                 size: Size(size, size),
-                painter: _ArrowPainter(widget.arrows, live, widget.flipped),
+                painter: _ArrowPainter(widget.arrows, live, widget.flipped,
+                    widget.badgeSquare, widget.badgeText, widget.badgeColor),
               ),
             ),
           ]),
@@ -302,7 +310,11 @@ class _ArrowPainter extends CustomPainter {
   final List<Arrow> arrows;
   final Arrow? live;
   final bool flipped;
-  _ArrowPainter(this.arrows, this.live, this.flipped);
+  final int? badgeSq;
+  final String? badgeText;
+  final Color? badgeColor;
+  _ArrowPainter(this.arrows, this.live, this.flipped,
+      [this.badgeSq, this.badgeText, this.badgeColor]);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -312,7 +324,7 @@ class _ArrowPainter extends CustomPainter {
     for (final a in all) {
       final from = _sqRect(a.from, s, flipped).center;
       final to = _sqRect(a.to, s, flipped).center;
-      final color = const Color(0xCCF5A623);
+      final color = a.color ?? const Color(0xCCF5A623);
       if (a.from == a.to) {
         canvas.drawCircle(
             from,
@@ -343,6 +355,25 @@ class _ArrowPainter extends CustomPainter {
         ..lineTo(base.dx - n.dx * head * 0.5, base.dy - n.dy * head * 0.5)
         ..close();
       canvas.drawPath(path, Paint()..color = color);
+    }
+
+    // Move-classification badge on the destination square.
+    final bs = badgeSq;
+    final bt = badgeText;
+    if (bs != null && bt != null) {
+      final r = _sqRect(bs, s, flipped);
+      final c = Offset(r.right - s * 0.17, r.top + s * 0.17);
+      canvas.drawCircle(c, s * 0.2, Paint()..color = Colors.white);
+      canvas.drawCircle(c, s * 0.17, Paint()..color = badgeColor ?? Colors.grey);
+      final tp = TextPainter(
+        text: TextSpan(
+          text: bt,
+          style: TextStyle(
+              fontSize: s * 0.2, fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
     }
   }
 
