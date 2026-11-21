@@ -47,10 +47,12 @@ jobs:
           set -euxo pipefail
           cp pubspec.yaml /tmp/pubspec.yaml.bak
           cp -r lib /tmp/lib.bak
+          if [ -d test ]; then cp -r test /tmp/test.bak; fi
           flutter create . --org com.oukchaktrang --project-name ouk_chaktrang --platforms=android
           cp /tmp/pubspec.yaml.bak pubspec.yaml
           rm -rf lib && cp -r /tmp/lib.bak lib
           rm -rf test
+          if [ -d /tmp/test.bak ]; then cp -r /tmp/test.bak test; fi
 
       # 3) Native packaging: extract .so files so the engine can be executed
       - name: Patch Gradle + install engine + MainActivity
@@ -89,6 +91,11 @@ jobs:
 
       - name: Flutter pub get
         run: flutter pub get
+
+      # Glicko unit tests: informational, a failure does not block the APK
+      - name: Unit tests (Glicko)
+        continue-on-error: true
+        run: flutter test
 
       - name: Build release APK (arm64)
         run: |

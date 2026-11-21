@@ -10,6 +10,7 @@ import '../screens/game_review_screen.dart';
 import '../services/game_analyzer.dart';
 import '../services/virtual_ecosystem.dart';
 import 'app_state.dart';
+import '../widgets/bot_avatar.dart';
 import '../widgets/ouk_board_widget.dart';
 import 'board_view.dart';
 
@@ -18,6 +19,8 @@ class GameScreen extends StatefulWidget {
   final BotPlayer bot;
   final int minutes;
   final bool casual; // casual: undo allowed, rating unchanged
+  final bool? userWhite; // null = random colour
+  final bool showTitles; // show GM / IM / seed badges (Random match)
 
   const GameScreen({
     super.key,
@@ -25,6 +28,8 @@ class GameScreen extends StatefulWidget {
     required this.bot,
     this.minutes = 10,
     this.casual = false,
+    this.userWhite,
+    this.showTitles = false,
   });
 
   @override
@@ -66,7 +71,7 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
-    _userSide = _rng.nextBool() ? Side.white : Side.black;
+    _userSide = (widget.userWhite ?? _rng.nextBool()) ? Side.white : Side.black;
     _botSide = _userSide.opp;
     _brain = widget.eco.brainFor(bot);
     _whiteMs = _blackMs = widget.minutes * 60000;
@@ -363,7 +368,7 @@ class _GameScreenState extends State<GameScreen> {
       context: context,
       builder: (c) => AlertDialog(
         title: Text(t('សំណើសុំស្មើ', 'Draw offer')),
-        content: Text('${bot.name}: $text'),
+        content: Text(text),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(c, false),
@@ -616,9 +621,11 @@ class _GameScreenState extends State<GameScreen> {
                       MaterialPageRoute(
                         builder: (_) => GameScreen(
                           eco: widget.eco,
-                          bot: widget.eco.pickOpponent(),
+                          bot: bot,
                           minutes: widget.minutes,
                           casual: widget.casual,
+                          userWhite: _userSide == Side.black,
+                          showTitles: widget.showTitles,
                         ),
                       ),
                     );
@@ -681,6 +688,7 @@ class _GameScreenState extends State<GameScreen> {
     required int elo,
     required Color color,
     required Side side,
+    BotPlayer? bot,
   }) {
     final captured = _capturedBy(side);
     final bal = pos.materialBalance;
@@ -690,17 +698,27 @@ class _GameScreenState extends State<GameScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       child: Row(children: [
-        CircleAvatar(
-          backgroundColor: color,
-          child: Text(_initial(name),
-              style: const TextStyle(color: Colors.white)),
-        ),
+        bot != null
+            ? BotAvatar(bot: bot, size: 40)
+            : CircleAvatar(
+                backgroundColor: color,
+                child: Text(_initial(name),
+                    style: const TextStyle(color: Colors.white)),
+              ),
         const SizedBox(width: 10),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('$flag $name ($elo)',
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600)),
+            Row(children: [
+              if (widget.showTitles && bot?.shownTitle != null) ...[
+                TitleBadge(title: bot!.shownTitle!),
+                const SizedBox(width: 6),
+              ],
+              Flexible(
+                child: Text('$flag $name ($elo)',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+              ),
+            ]),
             Row(children: [
               Flexible(
                 child: SingleChildScrollView(
@@ -774,6 +792,7 @@ class _GameScreenState extends State<GameScreen> {
             elo: bot.elo,
             color: botColor,
             side: _botSide,
+            bot: bot,
           ),
           OukBoardWidget(
             pos: pos,
@@ -821,7 +840,7 @@ class _GameScreenState extends State<GameScreen> {
                 color: const Color(0xFFE3F2FD),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Text('💬 ${bot.name}: $_chat'),
+              child: Text('🤖 $_chat'),
             ),
           if (_engineError != null)
             Padding(

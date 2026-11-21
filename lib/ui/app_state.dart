@@ -6,17 +6,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AppSettings {
   static final ValueNotifier<bool> km = ValueNotifier<bool>(true);
   static final ValueNotifier<int> boardTheme = ValueNotifier<int>(0);
+  static final ValueNotifier<bool> unlockAllBots = ValueNotifier<bool>(false);
 
   static Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     km.value = p.getBool('lang_km') ?? true;
     boardTheme.value = p.getInt('board_theme') ?? 0;
+    unlockAllBots.value = p.getBool('unlock_all') ?? false;
   }
 
   static Future<void> setKm(bool v) async {
     km.value = v;
     final p = await SharedPreferences.getInstance();
     await p.setBool('lang_km', v);
+  }
+
+  static Future<void> setUnlockAll(bool v) async {
+    unlockAllBots.value = v;
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('unlock_all', v);
   }
 
   static Future<void> setTheme(int i) async {

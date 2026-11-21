@@ -15,6 +15,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'glicko.dart';
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -24,6 +26,34 @@ String flagEmoji(String code) => String.fromCharCodes(
 
 double expectedScore(int a, int b) =>
     1.0 / (1.0 + pow(10, (b - a) / 400.0));
+
+const Set<String> _womenNames = {
+  'Sreypich', 'Sophea', 'Sreyneang', 'Bopha', 'Thida', 'Kunthea', 'Channary',
+  'ស្រីនាង', 'Hana', 'Aisha', 'Elena', 'Chloe', 'Dewi', 'Anya',
+};
+
+/// Title for a simulated bot from its rating. Under 2000 there is no title.
+/// Open: GM 2500+, IM 2400+, FM 2300+, CM 2200+, NM 2000-2199 (some).
+/// Women: WGM 2300+, WIM 2200+, WFM 2100+, WCM 2000+.
+String titleForBot(String name, int elo) {
+  final base = name.split('_').first;
+  if (_womenNames.contains(base)) {
+    if (elo >= 2500) return 'GM'; // women can earn the open GM title too
+    if (elo >= 2300) return 'WGM';
+    if (elo >= 2200) return 'WIM';
+    if (elo >= 2100) return 'WFM';
+    if (elo >= 2000) return 'WCM';
+    return '';
+  }
+  if (elo >= 2500) return 'GM';
+  if (elo >= 2400) return 'IM';
+  if (elo >= 2300) return 'FM';
+  if (elo >= 2200) return 'CM';
+  if (elo >= 2000 && name.codeUnits.fold<int>(0, (a, c) => a + c).isEven) {
+    return 'NM';
+  }
+  return '';
+}
 
 String formatDelta(int d) => d >= 0 ? '+$d' : '$d';
 
@@ -35,7 +65,7 @@ enum BotStyle { aggressive, solid, tricky, endgame }
 
 class BotPlayer {
   final String id;
-  final String name;
+  String name;
   final String countryCode;
   final int avatar;
   final BotStyle style;
@@ -44,6 +74,8 @@ class BotPlayer {
   int wins;
   int losses;
   int draws;
+  String? title; // FIDE-style title; null = not assigned yet, '' = none
+  final int seed; // 0 = none, 1..3 = Cambodian champion seed
 
   BotPlayer({
     required this.id,
@@ -56,10 +88,24 @@ class BotPlayer {
     this.wins = 0,
     this.losses = 0,
     this.draws = 0,
+    this.title,
+    this.seed = 0,
   });
 
   String get flag => flagEmoji(countryCode);
   int get games => wins + losses + draws;
+
+  /// Named master bots: fixed rating, never touched by the background simulation.
+  bool get isGm => id.startsWith('gm_');
+
+  /// Cambodian champion bots (fixed rating, seeded 1..3).
+  bool get isChampion => id.startsWith('kh_');
+
+  /// Fixed-rating named bots: never touched by the background simulation.
+  bool get isFixed => isGm || isChampion;
+
+  /// Title to display (GM, IM, FM, CM, NM, WGM, WIM, WFM, WCM) or null.
+  String? get shownTitle => (title == null || title!.isEmpty) ? null : title;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -72,6 +118,8 @@ class BotPlayer {
         'w': wins,
         'l': losses,
         'd': draws,
+        't': title,
+        'sd': seed,
       };
 
   factory BotPlayer.fromJson(Map<String, dynamic> j) => BotPlayer(
@@ -85,8 +133,62 @@ class BotPlayer {
         wins: j['w'] as int,
         losses: j['l'] as int,
         draws: j['d'] as int,
+        title: j['t'] as String?,
+        seed: (j['sd'] as int?) ?? 0,
       );
 }
+
+/// Master-level bots named after famous players. Ratings are approximate bot
+/// strength labels (mostly peak classical ratings, from memory) - edit freely.
+/// These are simulated bots, not affiliated with the real players.
+class _Gm {
+  final String id;
+  final String name;
+  final String cc;
+  final int elo;
+  final BotStyle style; // arbitrary personality label
+  const _Gm(this.id, this.name, this.cc, this.elo, this.style);
+}
+
+const List<_Gm> _gmRoster = [
+  _Gm('gm_magnus', 'Magnus Carlsen', 'NO', 2882, BotStyle.endgame),
+  _Gm('gm_hikaru', 'Hikaru Nakamura', 'US', 2820, BotStyle.tricky),
+  _Gm('gm_kasparov', 'Garry Kasparov', 'RU', 2851, BotStyle.aggressive),
+  _Gm('gm_caruana', 'Fabiano Caruana', 'US', 2844, BotStyle.solid),
+  _Gm('gm_aronian', 'Levon Aronian', 'US', 2830, BotStyle.tricky),
+  _Gm('gm_so', 'Wesley So', 'US', 2822, BotStyle.solid),
+  _Gm('gm_anand', 'Viswanathan Anand', 'IN', 2817, BotStyle.tricky),
+  _Gm('gm_ding', 'Ding Liren', 'CN', 2816, BotStyle.solid),
+  _Gm('gm_firouzja', 'Alireza Firouzja', 'FR', 2804, BotStyle.aggressive),
+  _Gm('gm_arjun', 'Arjun Erigaisi', 'IN', 2801, BotStyle.aggressive),
+  _Gm('gm_giri', 'Anish Giri', 'NL', 2798, BotStyle.solid),
+  _Gm('gm_gukesh', 'Gukesh D', 'IN', 2794, BotStyle.solid),
+  _Gm('gm_nepo', 'Ian Nepomniachtchi', 'RU', 2792, BotStyle.aggressive),
+  _Gm('gm_fischer', 'Bobby Fischer', 'US', 2785, BotStyle.aggressive),
+  _Gm('gm_keymer', 'Vincent Keymer', 'DE', 2776, BotStyle.solid),
+  _Gm('gm_abdusattorov', 'Nodirbek Abdusattorov', 'UZ', 2766, BotStyle.tricky),
+  _Gm('gm_sindarov', 'Javokhir Sindarov', 'UZ', 2760, BotStyle.solid),
+  _Gm('gm_praggnanandhaa', 'R Praggnanandhaa', 'IN', 2758, BotStyle.tricky),
+  _Gm('gm_polgar', 'Judit Polgar', 'HU', 2735, BotStyle.aggressive),
+  _Gm('gm_hou', 'Hou Yifan', 'CN', 2686, BotStyle.solid),
+];
+
+/// Strong Cambodian players as simulated seeded bots. The ratings below are
+/// PLACEHOLDERS (I do not know their real ratings) - edit them freely.
+class _Champ {
+  final String id;
+  final String name;
+  final int seed;
+  final int elo;
+  final BotStyle style;
+  const _Champ(this.id, this.name, this.seed, this.elo, this.style);
+}
+
+const List<_Champ> _khRoster = [
+  _Champ('kh_sok_limheng', 'សុខលីមហេង', 1, 2450, BotStyle.solid),
+  _Champ('kh_chhay_vireak', 'ឆយវីរ៉ា', 2, 2400, BotStyle.aggressive),
+  _Champ('kh_chiv_bora', 'ឈាវបូរ៉ា', 3, 2350, BotStyle.tricky),
+];
 
 class Club {
   final int id;
@@ -140,6 +242,9 @@ class UserProfile {
   int countingEscapes;
   int clubId; // -1 = none
   int trophies;
+  double rd; // Glicko rating deviation
+  int lastPlayed; // millisecondsSinceEpoch of the last rated game (0 = never)
+  bool onboarded; // chose a starting level
   Set<String> achievements;
 
   UserProfile({
@@ -154,6 +259,9 @@ class UserProfile {
     this.countingEscapes = 0,
     this.clubId = -1,
     this.trophies = 0,
+    this.rd = kInitialRd,
+    this.lastPlayed = 0,
+    this.onboarded = false,
     Set<String>? achievements,
   }) : achievements = achievements ?? <String>{};
 
@@ -171,6 +279,9 @@ class UserProfile {
         'ce': countingEscapes,
         'club': clubId,
         'tr': trophies,
+        'rd': rd,
+        'lp': lastPlayed,
+        'ob': onboarded,
         'ach': achievements.toList(),
       };
 
@@ -186,6 +297,9 @@ class UserProfile {
         countingEscapes: j['ce'] as int,
         clubId: j['club'] as int,
         trophies: j['tr'] as int,
+        rd: (j['rd'] as num?)?.toDouble() ?? 100, // saves from before Glicko
+        lastPlayed: (j['lp'] as int?) ?? 0,
+        onboarded: (j['ob'] as bool?) ?? true,
         achievements: Set<String>.from(j['ach'] as List),
       );
 }
@@ -198,10 +312,11 @@ class LeaderboardEntry {
   final int clubId;
   final int games;
   final bool isUser;
+  final String? title;
   int rank = 0;
   int trend = 0; // + moved up, - moved down since the last simulation
   LeaderboardEntry(this.id, this.name, this.flag, this.elo, this.clubId,
-      this.games, this.isUser);
+      this.games, this.isUser, {this.title});
 }
 
 class GameSummary {
@@ -549,8 +664,67 @@ class VirtualEcosystem extends ChangeNotifier {
         DateTime.fromMillisecondsSinceEpoch(j['last'] as int),
       );
     }
+    eco._ensureGrandmasters();
+    eco._ensureChampions();
+    eco._ensureTitles();
     await eco.save();
     return eco;
+  }
+
+  /// Adds the named master bots to saved games that predate them and keeps
+  /// their ratings in sync with [_gmRoster].
+  void _ensureGrandmasters() {
+    for (int i = 0; i < _gmRoster.length; i++) {
+      final g = _gmRoster[i];
+      final idx = bots.indexWhere((b) => b.id == g.id);
+      if (idx < 0) {
+        bots.add(BotPlayer(
+          id: g.id,
+          name: g.name,
+          countryCode: g.cc,
+          avatar: 100 + i,
+          style: g.style,
+          clubId: -1,
+          elo: g.elo,
+        ));
+      } else {
+        bots[idx].elo = g.elo;
+      }
+    }
+  }
+
+  void _ensureChampions() {
+    for (final c in _khRoster) {
+      final idx = bots.indexWhere((b) => b.id == c.id);
+      if (idx < 0) {
+        bots.add(BotPlayer(
+          id: c.id,
+          name: c.name,
+          countryCode: 'KH',
+          avatar: 200 + c.seed,
+          style: c.style,
+          clubId: -1,
+          elo: c.elo,
+          title: 'ស៊ីដេត ${c.seed}',
+          seed: c.seed,
+        ));
+      } else {
+        bots[idx].name = c.name;
+        bots[idx].elo = c.elo;
+        bots[idx].title = 'ស៊ីដេត ${c.seed}';
+      }
+    }
+  }
+
+  /// Assigns titles once (saved games from before titles existed get them too).
+  void _ensureTitles() {
+    for (final b in bots) {
+      if (b.isGm) {
+        b.title = 'GM';
+      } else if (b.title == null) {
+        b.title = titleForBot(b.name, b.elo);
+      }
+    }
   }
 
   Future<void> save() async {
@@ -592,7 +766,7 @@ class VirtualEcosystem extends ChangeNotifier {
   void simulateBackgroundMatches({int rounds = 5}) {
     _snapshotRanks();
     for (int i = 0; i < rounds; i++) {
-      final order = List<BotPlayer>.from(bots)
+      final order = bots.where((b) => !b.isFixed).toList()
         ..sort((a, b) => (a.elo + _rng.nextInt(160))
             .compareTo(b.elo + _rng.nextInt(160)));
       for (int j = 0; j + 1 < order.length; j += 2) {
@@ -647,7 +821,8 @@ class VirtualEcosystem extends ChangeNotifier {
   List<LeaderboardEntry> leaderboard({int? clubId, int? limit}) {
     final all = <LeaderboardEntry>[
       for (final b in bots)
-        LeaderboardEntry(b.id, b.name, b.flag, b.elo, b.clubId, b.games, false),
+        LeaderboardEntry(b.id, b.name, b.flag, b.elo, b.clubId, b.games, false,
+            title: b.shownTitle),
       LeaderboardEntry('user', user.name, flagEmoji(user.countryCode),
           user.elo, user.clubId, user.games, true),
     ];
@@ -668,12 +843,30 @@ class VirtualEcosystem extends ChangeNotifier {
 
   // ---- opponents --------------------------------------------------------------
 
+  /// Chance that a Random match picks a titled / featured player (GM bots and
+  /// Cambodian seeds included) instead of someone near your rating.
+  static const double kFeaturedChance = 0.2;
+
+  /// Random match: usually someone near your rating, sometimes a titled player.
+  BotPlayer pickRandomOpponent() {
+    final u = user.elo;
+    final featured =
+        bots.where((b) => b.isFixed || b.shownTitle != null).toList();
+    if (featured.isNotEmpty && _rng.nextDouble() < kFeaturedChance) {
+      return featured[_rng.nextInt(featured.length)];
+    }
+    final near = bots.where((b) => (b.elo - u).abs() <= 300).toList();
+    if (near.isNotEmpty) return near[_rng.nextInt(near.length)];
+    return pickOpponent();
+  }
+
   /// Random bot near [targetElo] (defaults to the user's rating).
   BotPlayer pickOpponent({int? targetElo, int spread = 150}) {
     final t = targetElo ?? user.elo;
-    final near = bots.where((b) => (b.elo - t).abs() <= spread).toList();
+    final regular = bots.where((b) => !b.isFixed).toList();
+    final near = regular.where((b) => (b.elo - t).abs() <= spread).toList();
     if (near.isNotEmpty) return near[_rng.nextInt(near.length)];
-    final sorted = List<BotPlayer>.from(bots)
+    final sorted = List<BotPlayer>.from(regular)
       ..sort((a, b) => (a.elo - t).abs().compareTo((b.elo - t).abs()));
     return sorted.first;
   }
@@ -693,16 +886,31 @@ class VirtualEcosystem extends ChangeNotifier {
     bool wasCountingEscape = false,
   }) {
     final before = user.elo;
-    final exp = expectedScore(user.elo, opponent.elo);
-    final k = user.games < 20 ? 40 : (user.elo < 2300 ? 24 : 16);
-    var delta = (k * (score - exp)).round();
-    if (score == 1.0 && delta < 1) delta = 1;
-    if (score == 0.0 && delta > -1) delta = -1;
-    user.elo = max(100, user.elo + delta);
+    final oppEloBefore = opponent.elo;
+    // Glicko-1: both sides are updated together (rating + RD), floor 100.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final me = RatingProfile(
+      rating: user.elo.toDouble(),
+      rd: user.rd,
+      lastPlayedMs: user.lastPlayed,
+      gamesPlayed: user.games,
+    );
+    final opp = RatingProfile(
+      rating: opponent.elo.toDouble(),
+      rd: kEstablishedRd, // bots count as established players
+      lastPlayedMs: now,
+      gamesPlayed: 100,
+    );
+    final res = Glicko.play(me, opp, score, nowMs: now);
+    user.elo = res.a.displayRating;
+    user.rd = res.a.rd;
+    user.lastPlayed = now;
     final applied = user.elo - before;
 
-    // opponent mirrors (bots keep a floor)
-    opponent.elo = (opponent.elo - applied).clamp(300, 3300).toInt();
+    // opponent mirrors (named bots keep a fixed rating)
+    if (!opponent.isFixed) {
+      opponent.elo = res.b.displayRating.clamp(300, 3300).toInt();
+    }
     if (score == 1.0) {
       user.wins++;
       opponent.losses++;
@@ -732,7 +940,7 @@ class VirtualEcosystem extends ChangeNotifier {
     if (score == 1.0) unlock('first_win');
     if (score == 1.0 && reason == 'checkmate') unlock('first_checkmate');
     if (score == 1.0 && reason == 'bot_resign') unlock('bot_resign');
-    if (score == 1.0 && opponent.elo + applied >= before + 200) unlock('giant_killer');
+    if (score == 1.0 && oppEloBefore >= before + 200) unlock('giant_killer');
     if (user.streak >= 10) unlock('streak_10');
     if (user.countingEscapes >= 3) unlock('counting_master');
     if (user.games >= 50) unlock('veteran_50');
@@ -745,6 +953,17 @@ class VirtualEcosystem extends ChangeNotifier {
   }
 
   // ---- clubs -------------------------------------------------------------------
+
+  /// Registration: the player picks a starting level (400/800/1200/1600/2000).
+  /// Rating Deviation starts at 350 so the first games move the rating quickly.
+  void setStartingLevel(SkillLevel level) {
+    user.elo = level.rating;
+    user.rd = kInitialRd;
+    user.lastPlayed = 0;
+    user.onboarded = true;
+    notifyListeners();
+    save();
+  }
 
   void joinClub(int clubId) {
     user.clubId = clubId;
@@ -767,7 +986,7 @@ class VirtualEcosystem extends ChangeNotifier {
   Tournament createTournament(
       {required TournamentFormat format, int size = 8}) {
     assert(size == 8 || size == 16);
-    final pool = List<BotPlayer>.from(bots)
+    final pool = bots.where((b) => !b.isFixed).toList()
       ..sort((a, b) => (a.elo - user.elo).abs().compareTo((b.elo - user.elo).abs()));
     final candidates = pool.take(size * 2).toList()..shuffle(_rng);
     final chosen = candidates.take(size - 1).toList();

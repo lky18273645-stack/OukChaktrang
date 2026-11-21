@@ -1,6 +1,7 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
 
+import 'screens/skill_select_screen.dart';
 import 'services/virtual_ecosystem.dart';
 import 'ui/app_state.dart';
 import 'ui/home_screen.dart';
@@ -24,7 +25,26 @@ class OukApp extends StatelessWidget {
           title: 'OukChaktrang.com',
           debugShowCheckedModeBanner: false,
           theme: ThemeData(colorSchemeSeed: Colors.brown, useMaterial3: true),
-          home: HomeScreen(eco),
+          home: _Root(eco),
         ),
       );
+}
+
+/// First launch -> choose a starting level, afterwards -> home.
+class _Root extends StatefulWidget {
+  final VirtualEcosystem eco;
+  const _Root(this.eco);
+
+  @override
+  State<_Root> createState() => _RootState();
+}
+
+class _RootState extends State<_Root> {
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.eco.user.onboarded) {
+      return SkillSelectScreen(widget.eco, onDone: () => setState(() {}));
+    }
+    return HomeScreen(widget.eco);
+  }
 }
