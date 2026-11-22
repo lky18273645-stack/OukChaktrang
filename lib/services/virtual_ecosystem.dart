@@ -16,6 +16,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'glicko.dart';
+import 'profile_models.dart';
+import 'tournament_engine.dart';
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -190,6 +192,13 @@ const List<_Champ> _khRoster = [
   _Champ('kh_chiv_bora', 'ឈាវបូរ៉ា', 3, 2350, BotStyle.tricky),
 ];
 
+/// Shown once after a tournament that earned a trophy / title.
+class RewardNotice {
+  final String tournamentName;
+  final TnReward reward;
+  const RewardNotice(this.tournamentName, this.reward);
+}
+
 class Club {
   final int id;
   final String nameKm;
@@ -247,6 +256,19 @@ class UserProfile {
   bool onboarded; // chose a starting level
   Set<String> achievements;
 
+  // ---- profile (Chess.com style)
+  Map<String, CatStats> cats; // bullet / blitz / rapid / daily
+  String? activeTitle; // chosen title badge (must be an earned one)
+  List<TitleAward> awards;
+  List<Trophy> trophyCase;
+  List<MatchRecord> history;
+  String bio;
+  int joinedMs;
+  int avatarSeed;
+  String flair;
+  int friends;
+  int tournamentWins;
+
   UserProfile({
     this.name = 'Player',
     this.countryCode = 'KH',
@@ -263,7 +285,75 @@ class UserProfile {
     this.lastPlayed = 0,
     this.onboarded = false,
     Set<String>? achievements,
-  }) : achievements = achievements ?? <String>{};
+    Map<String, CatStats>? cats,
+    this.activeTitle,
+    List<TitleAward>? awards,
+    List<Trophy>? trophyCase,
+    List<MatchRecord>? history,
+    this.bio = '',
+    this.joinedMs = 0,
+    this.avatarSeed = 7,
+    this.flair = '♟',
+    this.friends = 0,
+    this.tournamentWins = 0,
+  })  : achievements = achievements ?? <String>{},
+        cats = cats ?? <String, CatStats>{},
+        awards = awards ?? <TitleAward>[],
+        trophyCase = trophyCase ?? <Trophy>[],
+        history = history ?? <MatchRecord>[];
+
+  /// Rating record of one time-control category (created on demand).
+  CatStats cat(TimeCategory c) =>
+      cats.putIfAbsent(c.key, () => CatStats(rating: elo.toDouble(), rd: rd));
+
+  /// Creates missing categories (saves from before profiles existed).
+  void ensureCats() {
+    for (final c in TimeCategory.values) {
+      if (!cats.containsKey(c.key)) {
+        final rapid = c == TimeCategory.rapid;
+        cats[c.key] = CatStats(
+          rating: elo.toDouble(),
+          rd: rd,
+          wins: rapid ? wins : 0,
+          draws: rapid ? draws : 0,
+          losses: rapid ? losses : 0,
+        );
+      }
+    }
+    if (joinedMs == 0) joinedMs = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  /// Headline rating (used for bot locks, ranking, random match) = the best
+  /// rating among categories you have played, else your Rapid rating.
+  void syncHeadline() {
+    CatStats? best;
+    for (final c in cats.values) {
+      if (c.games > 0 && (best == null || c.rating > best.rating)) best = c;
+    }
+    best ??= cats[TimeCategory.rapid.key];
+    if (best != null) {
+      elo = best.rating.round();
+      rd = best.rd;
+    }
+  }
+
+  /// Earned titles that are still valid (seasonal ones expire).
+  Set<String> earnedTitles(int nowMs) =>
+      awards.where((a) => a.activeAt(nowMs)).map((a) => a.title).toSet();
+
+  /// The badge shown next to the name everywhere (lobby, profile, board, ranking).
+  String? titleAt(int nowMs) {
+    final active = earnedTitles(nowMs);
+    final chosen = activeTitle;
+    if (chosen != null && chosen.isEmpty) return null; // user chose to hide titles
+    if (chosen != null && active.contains(chosen)) return chosen;
+    for (final t in kTitlePriority) {
+      if (active.contains(t)) return t;
+    }
+    return null;
+  }
+
+  String? get title => titleAt(DateTime.now().millisecondsSinceEpoch);
 
   int get games => wins + losses + draws;
 
@@ -283,6 +373,17 @@ class UserProfile {
         'lp': lastPlayed,
         'ob': onboarded,
         'ach': achievements.toList(),
+        'cats': cats.map((k, v) => MapEntry(k, v.toJson())),
+        'at': activeTitle,
+        'aw': awards.map((e) => e.toJson()).toList(),
+        'tcase': trophyCase.map((e) => e.toJson()).toList(),
+        'hist': history.map((e) => e.toJson()).toList(),
+        'bio': bio,
+        'jm': joinedMs,
+        'av': avatarSeed,
+        'fl': flair,
+        'fr': friends,
+        'tw': tournamentWins,
       };
 
   factory UserProfile.fromJson(Map<String, dynamic> j) => UserProfile(
@@ -301,6 +402,24 @@ class UserProfile {
         lastPlayed: (j['lp'] as int?) ?? 0,
         onboarded: (j['ob'] as bool?) ?? true,
         achievements: Set<String>.from(j['ach'] as List),
+        cats: (j['cats'] as Map?)?.map((k, v) => MapEntry(
+            k as String, CatStats.fromJson(Map<String, dynamic>.from(v as Map)))),
+        activeTitle: j['at'] as String?,
+        awards: (j['aw'] as List?)
+            ?.map((e) => TitleAward.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+        trophyCase: (j['tcase'] as List?)
+            ?.map((e) => Trophy.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+        history: (j['hist'] as List?)
+            ?.map((e) => MatchRecord.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+        bio: (j['bio'] as String?) ?? '',
+        joinedMs: (j['jm'] as int?) ?? 0,
+        avatarSeed: (j['av'] as int?) ?? 7,
+        flair: (j['fl'] as String?) ?? '♟',
+        friends: (j['fr'] as int?) ?? 0,
+        tournamentWins: (j['tw'] as int?) ?? 0,
       );
 }
 
@@ -581,6 +700,8 @@ class VirtualEcosystem extends ChangeNotifier {
   final List<Club> clubs;
   UserProfile user;
   Tournament? activeTournament;
+  final List<Tourney> tournaments = [];
+  RewardNotice? pendingReward; // shown once by the tournament screens
   DateTime lastSim;
   Map<String, int> _prevRank = {};
 
@@ -663,10 +784,15 @@ class VirtualEcosystem extends ChangeNotifier {
             : Tournament.fromJson(j['tour'] as Map<String, dynamic>),
         DateTime.fromMillisecondsSinceEpoch(j['last'] as int),
       );
+      for (final e in (j['tourns'] as List?) ?? const []) {
+        eco.tournaments.add(Tourney.fromJson(Map<String, dynamic>.from(e as Map)));
+      }
     }
     eco._ensureGrandmasters();
     eco._ensureChampions();
     eco._ensureTitles();
+    eco.user.ensureCats();
+    eco._ensureTournaments();
     await eco.save();
     return eco;
   }
@@ -737,6 +863,7 @@ class VirtualEcosystem extends ChangeNotifier {
           'user': user.toJson(),
           'tour': activeTournament?.toJson(),
           'last': lastSim.millisecondsSinceEpoch,
+          'tourns': tournaments.map((t) => t.toJson()).toList(),
         }));
   }
 
@@ -824,7 +951,8 @@ class VirtualEcosystem extends ChangeNotifier {
         LeaderboardEntry(b.id, b.name, b.flag, b.elo, b.clubId, b.games, false,
             title: b.shownTitle),
       LeaderboardEntry('user', user.name, flagEmoji(user.countryCode),
-          user.elo, user.clubId, user.games, true),
+          user.elo, user.clubId, user.games, true,
+          title: user.title),
     ];
     all.sort((a, b) => b.elo.compareTo(a.elo));
     for (int i = 0; i < all.length; i++) {
@@ -884,16 +1012,21 @@ class VirtualEcosystem extends ChangeNotifier {
     required String reason,
     double accuracy = 0,
     bool wasCountingEscape = false,
+    int minutes = 10,
+    String? tournamentId,
   }) {
-    final before = user.elo;
+    // Each time control (Bullet / Blitz / Rapid) has its own Glicko rating.
+    final cat = categoryForMinutes(minutes);
+    final cs = user.cat(cat);
+    final before = cs.rating.round();
     final oppEloBefore = opponent.elo;
     // Glicko-1: both sides are updated together (rating + RD), floor 100.
     final now = DateTime.now().millisecondsSinceEpoch;
     final me = RatingProfile(
-      rating: user.elo.toDouble(),
-      rd: user.rd,
-      lastPlayedMs: user.lastPlayed,
-      gamesPlayed: user.games,
+      rating: cs.rating,
+      rd: cs.rd,
+      lastPlayedMs: cs.lastPlayedMs,
+      gamesPlayed: cs.games,
     );
     final opp = RatingProfile(
       rating: opponent.elo.toDouble(),
@@ -902,10 +1035,20 @@ class VirtualEcosystem extends ChangeNotifier {
       gamesPlayed: 100,
     );
     final res = Glicko.play(me, opp, score, nowMs: now);
-    user.elo = res.a.displayRating;
-    user.rd = res.a.rd;
+    cs.rating = res.a.rating;
+    cs.rd = res.a.rd;
+    cs.lastPlayedMs = now;
+    final after = cs.rating.round();
+    if (after > cs.peak) cs.peak = after;
     user.lastPlayed = now;
-    final applied = user.elo - before;
+    final applied = after - before;
+    if (score == 1.0) {
+      cs.wins++;
+    } else if (score == 0.0) {
+      cs.losses++;
+    } else {
+      cs.draws++;
+    }
 
     // opponent mirrors (named bots keep a fixed rating)
     if (!opponent.isFixed) {
@@ -946,13 +1089,41 @@ class VirtualEcosystem extends ChangeNotifier {
     if (user.games >= 50) unlock('veteran_50');
     if (score == 0.5 && reason == 'agreement') unlock('draw_diplomat');
 
+    user.syncHeadline();
+    user.history.insert(
+      0,
+      MatchRecord(
+        id: 'g$now',
+        dateMs: now,
+        minutes: minutes,
+        category: cat.key,
+        opponentName: opponent.name,
+        opponentTitle: opponent.shownTitle,
+        opponentFlag: opponent.flag,
+        opponentElo: oppEloBefore,
+        score: score,
+        delta: applied,
+        accuracy: accuracy,
+        reason: reason,
+        tournamentId: tournamentId,
+      ),
+    );
+    if (user.history.length > 100) {
+      user.history.removeRange(100, user.history.length);
+    }
     notifyListeners();
     save();
-    return GameSummary(score, reason, opponent, before, user.elo, applied,
+    return GameSummary(score, reason, opponent, before, after, applied,
         accuracy, unlocked);
   }
 
   // ---- clubs -------------------------------------------------------------------
+
+  /// Call after editing the profile from the UI.
+  void touch() {
+    notifyListeners();
+    save();
+  }
 
   /// Registration: the player picks a starting level (400/800/1200/1600/2000).
   /// Rating Deviation starts at 350 so the first games move the rating quickly.
@@ -961,6 +1132,154 @@ class VirtualEcosystem extends ChangeNotifier {
     user.rd = kInitialRd;
     user.lastPlayed = 0;
     user.onboarded = true;
+    for (final c in TimeCategory.values) {
+      user.cats[c.key] = CatStats(rating: level.rating.toDouble());
+    }
+    if (user.joinedMs == 0) user.joinedMs = DateTime.now().millisecondsSinceEpoch;
+    notifyListeners();
+    save();
+  }
+
+  // ---- tournaments (offline, simulated) ---------------------------------------
+
+  List<TnEntrant> _pool() => [
+        for (final b in bots)
+          TnEntrant(b.id, b.name, b.flag, b.shownTitle, b.elo),
+      ];
+
+  TnEntrant _me() => TnEntrant(
+      'user', user.name, flagEmoji(user.countryCode), user.title, user.elo);
+
+  void _ensureTournaments() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (tournaments.isEmpty) TnScheduler.seedHistory(tournaments, now, _pool());
+    TnScheduler.ensure(tournaments, now, _pool());
+    TnScheduler.prune(tournaments);
+  }
+
+  Tourney? tourneyById(String id) {
+    for (final t in tournaments) {
+      if (t.id == id) return t;
+    }
+    return null;
+  }
+
+  int _lastTournamentSave = 0;
+
+  /// Moves every tournament forward in time, hands out rewards and keeps the
+  /// schedule full. Returns true when anything changed.
+  bool tickTournaments() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var changed = false;
+    for (final t in tournaments) {
+      if (!t.finished) {
+        if (TnEngine.advance(t, now)) changed = true;
+      }
+      if (t.finished && !t.rewarded) {
+        _finalizeTournament(t);
+        changed = true;
+      }
+    }
+    if (TnScheduler.ensure(tournaments, now, _pool()) > 0) changed = true;
+    TnScheduler.prune(tournaments);
+    if (changed) {
+      notifyListeners();
+      if (now - _lastTournamentSave > 20000) {
+        _lastTournamentSave = now;
+        save();
+      }
+    }
+    return changed;
+  }
+
+  String? _bestActiveTitle() {
+    final active = user.earnedTitles(DateTime.now().millisecondsSinceEpoch);
+    for (final t in kTitlePriority) {
+      if (active.contains(t)) return t;
+    }
+    return null;
+  }
+
+  /// Trophy for the top 3, title badge for the winner, shown everywhere.
+  void _finalizeTournament(Tourney t) {
+    if (t.rewarded) return;
+    t.rewarded = true;
+    final r = TnEngine.rewardFor(t, winsBefore: user.tournamentWins);
+    if (r == null) return;
+    final tc = t.timeControl;
+    if (r.trophyPlace != null) {
+      user.trophyCase.insert(
+        0,
+        Trophy(
+          place: r.trophyPlace!,
+          tournamentId: t.id,
+          tournamentName: t.name,
+          format: t.format.name,
+          timeControl: tc,
+          dateMs: t.finishedMs,
+        ),
+      );
+      user.trophies++;
+    }
+    if (r.rank == 1) user.tournamentWins++;
+    if (r.title != null) {
+      user.awards.add(TitleAward(
+        title: r.title!,
+        tournamentId: t.id,
+        tournamentName: t.name,
+        awardedMs: t.finishedMs,
+        expiresMs: r.titleExpiresMs,
+      ));
+      user.activeTitle = _bestActiveTitle();
+    }
+    pendingReward = RewardNotice(t.name, r);
+    save();
+  }
+
+  void joinTourney(Tourney t) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    TnEngine.join(t, _me(), now);
+    notifyListeners();
+    save();
+  }
+
+  void leaveTourney(Tourney t) {
+    TnEngine.leave(t, DateTime.now().millisecondsSinceEpoch);
+    notifyListeners();
+    save();
+  }
+
+  /// Next game of the user in this tournament (arena: new pairing, swiss: the
+  /// current round's pairing). null = nobody available / nothing to play yet.
+  TnMatch? startTourneyMatch(Tourney t, {bool berserk = false}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    TnMatch? m;
+    if (t.format == TnFormat.arena) {
+      m = TnEngine.startUserArenaMatch(t, now, berserk: berserk);
+    } else {
+      TnEngine.advance(t, now);
+      m = t.userOpenMatch;
+    }
+    notifyListeners();
+    return m;
+  }
+
+  /// The bot that plays against the user in [m].
+  BotPlayer? opponentOf(TnMatch m) {
+    final id = m.whiteId == 'user' ? m.blackId : m.whiteId;
+    for (final b in bots) {
+      if (b.id == id) return b;
+    }
+    return null;
+  }
+
+  void reportTourneyGame(TourneyGameInfo info, double score, int plies) {
+    final t = tourneyById(info.tournamentId);
+    if (t == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    TnEngine.reportUserMatch(t, info.matchId, score, plies, info.berserk, now);
+    TnEngine.advance(t, now);
+    if (t.finished && !t.rewarded) _finalizeTournament(t);
     notifyListeners();
     save();
   }

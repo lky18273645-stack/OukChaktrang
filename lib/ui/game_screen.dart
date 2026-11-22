@@ -8,6 +8,8 @@ import '../engine/fairy_engine.dart';
 import '../engine/ouk_rules.dart';
 import '../screens/game_review_screen.dart';
 import '../services/game_analyzer.dart';
+import '../services/profile_models.dart';
+import '../services/tournament_engine.dart' show TourneyGameInfo;
 import '../services/virtual_ecosystem.dart';
 import 'app_state.dart';
 import '../widgets/bot_avatar.dart';
@@ -21,6 +23,8 @@ class GameScreen extends StatefulWidget {
   final bool casual; // casual: undo allowed, rating unchanged
   final bool? userWhite; // null = random colour
   final bool showTitles; // show GM / IM / seed badges (Random match)
+  final TourneyGameInfo? tournament; // set when this game belongs to a tournament
+  final int? userClockMs; // berserk: the user's clock in ms (opponent keeps full time)
 
   const GameScreen({
     super.key,
@@ -30,6 +34,8 @@ class GameScreen extends StatefulWidget {
     this.casual = false,
     this.userWhite,
     this.showTitles = false,
+    this.tournament,
+    this.userClockMs,
   });
 
   @override
@@ -75,6 +81,14 @@ class _GameScreenState extends State<GameScreen> {
     _botSide = _userSide.opp;
     _brain = widget.eco.brainFor(bot);
     _whiteMs = _blackMs = widget.minutes * 60000;
+    final uc = widget.userClockMs;
+    if (uc != null) {
+      if (_userSide == Side.white) {
+        _whiteMs = uc;
+      } else {
+        _blackMs = uc;
+      }
+    }
     _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) => _tick());
     _initEngine();
   }
@@ -465,7 +479,7 @@ class _GameScreenState extends State<GameScreen> {
         info.attacker != null &&
         info.attacker != _userSide;
     final GameSummary summary;
-    if (widget.casual) {
+    if (widget.casual && widget.tournament == null) {
       final e = widget.eco.user.elo;
       summary = GameSummary(score, reason, bot, e, e, 0, acc, const []);
     } else {
@@ -475,8 +489,12 @@ class _GameScreenState extends State<GameScreen> {
         reason: reason,
         accuracy: acc,
         wasCountingEscape: escape,
+        minutes: widget.minutes,
+        tournamentId: widget.tournament?.tournamentId,
       );
     }
+    final tn = widget.tournament;
+    if (tn != null) widget.eco.reportTourneyGame(tn, score, _moves.length);
     unawaited(widget.eco.onGameFinished());
     if (!mounted) return;
     setState(() {});
@@ -606,7 +624,7 @@ class _GameScreenState extends State<GameScreen> {
                 child: OutlinedButton(
                   onPressed: () {
                     Navigator.pop(dctx);
-                    Navigator.pop(context);
+                    Navigator.pop(context, false);
                   },
                   child: Text(t('ត្រឡប់', 'Back')),
                 ),
@@ -616,6 +634,10 @@ class _GameScreenState extends State<GameScreen> {
                 child: FilledButton(
                   onPressed: () {
                     Navigator.pop(dctx);
+                    if (widget.tournament != null) {
+                      Navigator.pop(context, true); // lobby starts the next game
+                      return;
+                    }
                     Navigator.pushReplacement(
                       context,
                       MaterialPageRoute(
@@ -630,7 +652,9 @@ class _GameScreenState extends State<GameScreen> {
                       ),
                     );
                   },
-                  child: Text(t('លេងម្តងទៀត', 'Rematch')),
+                  child: Text(widget.tournament != null
+                      ? t('ហ្គេមបន្ទាប់', 'Next game')
+                      : t('លេងម្តងទៀត', 'Rematch')),
                 ),
               ),
             ]),
@@ -689,6 +713,7 @@ class _GameScreenState extends State<GameScreen> {
     required Color color,
     required Side side,
     BotPlayer? bot,
+    String? title,
   }) {
     final captured = _capturedBy(side);
     final bal = pos.materialBalance;
@@ -709,8 +734,8 @@ class _GameScreenState extends State<GameScreen> {
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              if (widget.showTitles && bot?.shownTitle != null) ...[
-                TitleBadge(title: bot!.shownTitle!),
+              if (title != null) ...[
+                TitleBadge(title: title),
                 const SizedBox(width: 6),
               ],
               Flexible(
@@ -793,6 +818,7 @@ class _GameScreenState extends State<GameScreen> {
             color: botColor,
             side: _botSide,
             bot: bot,
+            title: widget.showTitles ? bot.shownTitle : null,
           ),
           OukBoardWidget(
             pos: pos,
@@ -818,9 +844,10 @@ class _GameScreenState extends State<GameScreen> {
           _playerBar(
             name: widget.eco.user.name,
             flag: flagEmoji(widget.eco.user.countryCode),
-            elo: widget.eco.user.elo,
+            elo: widget.eco.user.cat(categoryForMinutes(widget.minutes)).rating.round(),
             color: Colors.brown,
             side: _userSide,
+            title: widget.eco.user.title,
           ),
           if (info.active)
             Padding(

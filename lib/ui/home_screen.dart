@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 
 import '../screens/bot_menu_screen.dart';
+import '../screens/profile_view.dart';
+import '../screens/tournament_hub.dart';
 import '../services/glicko.dart';
 import '../widgets/bot_avatar.dart';
 import 'game_screen.dart';
@@ -27,7 +29,13 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (context, _, __) => AnimatedBuilder(
         animation: widget.eco,
         builder: (context, ___) {
-          final pages = [_playPage(), _leaderboardPage(), _settingsPage()];
+          final pages = [
+            _playPage(),
+            TournamentHub(widget.eco),
+            _leaderboardPage(),
+            ProfileView(widget.eco),
+            _settingsPage(),
+          ];
           return Scaffold(
             appBar: AppBar(title: const Text('OukChaktrang.com')),
             body: pages[_tab],
@@ -39,8 +47,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     icon: const Icon(Icons.sports_esports),
                     label: t('លេង', 'Play')),
                 NavigationDestination(
+                    icon: const Icon(Icons.emoji_events),
+                    label: t('ព្រឹត្តិការណ៍', 'Events')),
+                NavigationDestination(
                     icon: const Icon(Icons.leaderboard),
                     label: t('ចំណាត់ថ្នាក់', 'Ranking')),
+                NavigationDestination(
+                    icon: const Icon(Icons.person),
+                    label: t('ប្រវត្តិរូប', 'Profile')),
                 NavigationDestination(
                     icon: const Icon(Icons.settings),
                     label: t('ការកំណត់', 'Settings')),

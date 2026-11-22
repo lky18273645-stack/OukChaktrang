@@ -219,7 +219,7 @@ class TitleBadge extends StatelessWidget {
       padding: EdgeInsets.symmetric(
           horizontal: fontSize * 0.45, vertical: fontSize * 0.12),
       decoration: BoxDecoration(
-        color: const Color(0xFF8A2D2D),
+        color: const Color(0xFFB33430),
         borderRadius: BorderRadius.circular(fontSize * 0.3),
       ),
       child: Text(title,
