@@ -831,13 +831,13 @@ class VirtualEcosystem extends ChangeNotifier {
           style: c.style,
           clubId: -1,
           elo: c.elo,
-          title: 'ស៊ីដេត ${c.seed}',
+          title: 'GM',
           seed: c.seed,
         ));
       } else {
         bots[idx].name = c.name;
         bots[idx].elo = c.elo;
-        bots[idx].title = 'ស៊ីដេត ${c.seed}';
+        bots[idx].title = 'GM';
       }
     }
   }

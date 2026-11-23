@@ -229,7 +229,7 @@ class MatchRecord {
         minutes: j['m'] as int,
         category: j['c'] as String,
         opponentName: j['on'] as String,
-        opponentTitle: j['ot'] as String?,
+        opponentTitle: normalizeTitle(j['ot'] as String?),
         opponentFlag: j['of'] as String,
         opponentElo: j['oe'] as int,
         score: (j['s'] as num).toDouble(),
@@ -239,6 +239,10 @@ class MatchRecord {
         tournamentId: j['tid'] as String?,
       );
 }
+
+/// Old saves used a seed label; the app now shows the red GM badge instead.
+String? normalizeTitle(String? t) =>
+    (t != null && t.startsWith('ស៊ីដេត')) ? 'GM' : t;
 
 /// Which title a tournament result earns. Order = display priority.
 const List<String> kTitlePriority = ['CM', 'CHAMP', 'ARENA KING'];

@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 
 import '../screens/bot_menu_screen.dart';
+import '../screens/leaderboard_view.dart';
 import '../screens/profile_view.dart';
 import '../screens/tournament_hub.dart';
 import '../services/glicko.dart';
@@ -32,7 +33,7 @@ class _HomeScreenState extends State<HomeScreen> {
           final pages = [
             _playPage(),
             TournamentHub(widget.eco),
-            _leaderboardPage(),
+            LeaderboardView(widget.eco),
             ProfileView(widget.eco),
             _settingsPage(),
           ];

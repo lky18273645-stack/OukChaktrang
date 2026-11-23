@@ -85,7 +85,7 @@ class BotAvatar extends StatelessWidget {
                 padding: EdgeInsets.symmetric(
                     horizontal: size * 0.07, vertical: size * 0.02),
                 color: const Color(0xFFD4A017),
-                child: Text(bot.seed > 0 ? '★${bot.seed}' : (bot.shownTitle ?? 'GM'),
+                child: Text(bot.shownTitle ?? 'GM',
                     style: TextStyle(
                         fontSize: size * 0.16,
                         fontWeight: FontWeight.bold,
@@ -228,6 +228,27 @@ class TitleBadge extends StatelessWidget {
               fontSize: fontSize,
               fontWeight: FontWeight.bold,
               height: 1.1)),
+    );
+  }
+}
+
+
+/// Avatar from a plain number (used for the 10,000 directory players).
+class SeedAvatar extends StatelessWidget {
+  final int seed;
+  final double size;
+  final bool rounded;
+  const SeedAvatar({super.key, required this.seed, this.size = 48, this.rounded = true});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(rounded ? size * 0.12 : 0),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: CustomPaint(painter: _FacePainter(seed)),
+      ),
     );
   }
 }

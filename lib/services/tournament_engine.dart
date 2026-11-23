@@ -114,6 +114,10 @@ class TnEntrant {
   const TnEntrant(this.id, this.name, this.flag, this.title, this.rating);
 }
 
+/// Old saves used a seed label; the app now shows the red GM badge instead.
+String? _fixTitle(String? t) =>
+    (t != null && t.startsWith('ស៊ីដេត')) ? 'GM' : t;
+
 class TnPlayer {
   final String id; // bot id or 'user'
   final String name;
@@ -175,7 +179,7 @@ class TnPlayer {
       id: j['id'] as String,
       name: j['n'] as String,
       flag: j['f'] as String,
-      title: j['t'] as String?,
+      title: _fixTitle(j['t'] as String?),
       rating: j['r'] as int,
       isUser: j['u'] as bool,
       joinMs: j['j'] as int,

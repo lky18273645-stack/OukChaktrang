@@ -111,3 +111,22 @@ CREATE TABLE tournament_matches (id TEXT PRIMARY KEY, tournament_id TEXT, round 
   black_id TEXT, start_ms BIGINT, end_ms BIGINT, white_score REAL, berserk_w BOOLEAN, berserk_b BOOLEAN,
   plies INT, applied BOOLEAN);
 ```
+
+## Bot directory (10,000 accounts)
+
+`lib/services/bot_directory.dart` generates the 10,000 bot accounts on the fly
+(deterministic per index, nothing stored), so the leaderboard, search and profile
+pages always show the same players.
+
+```json
+{ "id": 1042, "username": "SokhaChess17", "cc": "KH", "avatarNo": 311,
+  "joinedMs": 1712000000000, "title": "GM",
+  "blitz": 2611, "rapid": 2584, "bullet": 2530 }
+```
+
+* 85 named bots (GM roster, Cambodian champions, regular bots) + 9,915 generated.
+* Ratings 400–3300; about 1 % reach GM level (2500+) and carry the red `GM` badge.
+* Per-profile statistics (peak, W/D/L, recent games) come from the same seed.
+* Queries: `top`, `page` (pagination), `rankOf`, `rankOfRating`, `search`.
+* To move to a backend, export `BotDirectory.all` as JSON/CSV and import it into
+  the `users` / `user_ratings` tables above.
