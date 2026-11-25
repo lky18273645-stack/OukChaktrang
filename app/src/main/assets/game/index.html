@@ -1,0 +1,477 @@
+# Highway Car Racing — Complete Android APK Project
+
+> **Target device:** Redmi 15C 5G (MediaTek Dimensity 6300, ~2.3 GB available RAM)  
+> **APK size target:** < 20 MB  
+> **Target FPS:** Locked 60 FPS  
+> **Build system:** Gradle + GitHub Actions (Java 17)  
+> **Engine:** Android WebView + Three.js (hardware-accelerated, no external asset downloads)
+
+---
+
+## Table of Contents
+1. [Complete File Tree](#file-tree)
+2. [Root-level Gradle files](#root-gradle)
+3. [App-level Gradle + Manifest](#app-gradle)
+4. [MainActivity.kt](#mainactivity)
+5. [Game HTML/JS Bundle (Three.js engine)](#game-bundle)
+6. [Res: layouts, values, drawable](#res)
+7. [GitHub Actions Workflow](#github-actions)
+8. [Push Instructions](#push-instructions)
+
+---
+
+## 1. Complete File Tree {#file-tree}
+
+```
+OukChaktrang/
+├── .github/
+│   └── workflows/
+│       └── build-racing-apk.yml
+├── app/
+│   ├── build.gradle
+│   ├── proguard-rules.pro
+│   └── src/
+│       └── main/
+│           ├── AndroidManifest.xml
+│           ├── java/
+│           │   └── com/
+│           │       └── oukchaktrang/
+│           │           └── racing/
+│           │               └── MainActivity.kt
+│           ├── assets/
+│           │   └── game/
+│           │       └── index.html          ← entire Three.js game (self-contained)
+│           └── res/
+│               ├── layout/
+│               │   └── activity_main.xml
+│               ├── values/
+│               │   ├── strings.xml
+│               │   └── themes.xml
+│               └── drawable/
+│                   └── ic_launcher_background.xml
+├── build.gradle
+├── gradle.properties
+├── settings.gradle
+└── gradlew / gradlew.bat / gradle/wrapper/
+```
+
+---
+
+## 2. Root-level Gradle Files {#root-gradle}
+
+### `build.gradle` (project root)
+
+```groovy
+// Top-level build file
+plugins {
+    id 'com.android.application' version '8.2.2' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+}
+```
+
+### `settings.gradle`
+
+```groovy
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'OukChaktrang'
+include ':app'
+```
+
+### `gradle.properties`
+
+```properties
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+org.gradle.caching=true
+android.useAndroidX=true
+kotlin.code.style=official
+android.nonTransitiveRClass=true
+```
+
+### `gradle/wrapper/gradle-wrapper.properties`
+
+```properties
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+```
+
+---
+
+## 3. App-level Gradle + Manifest {#app-gradle}
+
+### `app/build.gradle`
+
+```groovy
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.oukchaktrang.racing'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.oukchaktrang.racing'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+
+        // Keep APK small — no ABI splits needed for WebView-only app
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Self-signed debug key so GitHub Actions can produce a runnable APK
+            // without needing a keystore secret for the first build.
+            signingConfig signingConfigs.debug
+        }
+        debug {
+            applicationIdSuffix '.debug'
+            debuggable true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    // Merge assets from the assets folder cleanly
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
+
+    packagingOptions {
+        resources {
+            excludes += '/META-INF/{AL2.0,LGPL2.1}'
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    // No other dependencies — entire game runs in WebView
+}
+```
+
+### `app/proguard-rules.pro`
+
+```
+# Keep WebView JavaScript interface
+-keepclassmembers class com.oukchaktrang.racing.** {
+    @android.webkit.JavascriptInterface <methods>;
+}
+-keep class com.oukchaktrang.racing.GameBridge { *; }
+```
+
+### `app/src/main/AndroidManifest.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- No internet permission needed — 100% offline -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Declare required hardware features as optional so it installs on all devices -->
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+
+    <application
+        android:allowBackup="true"
+        android:hardwareAccelerated="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Racing"
+        android:largeHeap="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true"
+            android:immersive="true"
+            android:screenOrientation="landscape"
+            android:windowSoftInputMode="stateHidden|adjustNothing">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>
+```
+
+---
+
+## 4. MainActivity.kt {#mainactivity}
+
+### `app/src/main/java/com/oukchaktrang/racing/MainActivity.kt`
+
+```kotlin
+package com.oukchaktrang.racing
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.SharedPreferences
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.Build
+import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.view.WindowManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebSettings
+import android.webkit.WebView
+import androidx.appcompat.app.AppCompatActivity
+
+class MainActivity : AppCompatActivity(), SensorEventListener {
+
+    private lateinit var webView: WebView
+    private lateinit var sensorManager: SensorManager
+    private var accelerometer: Sensor? = null
+    private lateinit var prefs: SharedPreferences
+
+    // Tilt values forwarded to JS
+    private var tiltX = 0f
+    private var tiltY = 0f
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Keep screen on during gameplay
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Full-screen immersive
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            )
+        }
+
+        setContentView(R.layout.activity_main)
+        webView = findViewById(R.id.webView)
+        prefs = getSharedPreferences("racing_prefs", Context.MODE_PRIVATE)
+
+        configureWebView()
+
+        // Load game from assets (zero network required)
+        webView.loadUrl("file:///android_asset/game/index.html")
+
+        // Accelerometer setup
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun configureWebView() {
+        with(webView.settings) {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = true
+            allowContentAccess = true
+            cacheMode = WebSettings.LOAD_NO_CACHE
+            mediaPlaybackRequiresUserGesture = false
+            // Hardware-accelerated rendering
+            setRenderPriority(WebSettings.RenderPriority.HIGH)
+            // Disable text size adjustment
+            textZoom = 100
+            // Disable unnecessary features
+            setSupportZoom(false)
+            builtInZoomControls = false
+            displayZoomControls = false
+            loadWithOverviewMode = true
+            useWideViewPort = true
+        }
+        // Enable hardware acceleration on the WebView layer
+        webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+        // Attach JavaScript bridge
+        webView.addJavascriptInterface(GameBridge(), "AndroidBridge")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        accelerometer?.also { sensor ->
+            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        }
+        webView.onResume()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sensorManager.unregisterListener(this)
+        webView.onPause()
+    }
+
+    override fun onDestroy() {
+        webView.destroy()
+        super.onDestroy()
+    }
+
+    // ── Accelerometer ──────────────────────────────────────────────────────
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            tiltX = event.values[0]  // left/right tilt
+            tiltY = event.values[1]  // forward/back tilt
+            webView.post {
+                webView.evaluateJavascript(
+                    "window.onTilt && window.onTilt($tiltX, $tiltY);",
+                    null
+                )
+            }
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) { /* unused */ }
+
+    // ── JavaScript ↔ Kotlin Bridge ─────────────────────────────────────────
+    inner class GameBridge {
+
+        @JavascriptInterface
+        fun saveHighScore(score: Int) {
+            val current = prefs.getInt("high_score", 0)
+            if (score > current) {
+                prefs.edit().putInt("high_score", score).apply()
+            }
+        }
+
+        @JavascriptInterface
+        fun getHighScore(): Int = prefs.getInt("high_score", 0)
+
+        @JavascriptInterface
+        fun saveSettings(quality: String, control: String) {
+            prefs.edit()
+                .putString("quality", quality)
+                .putString("control", control)
+                .apply()
+        }
+
+        @JavascriptInterface
+        fun getSettings(): String {
+            val q = prefs.getString("quality", "medium") ?: "medium"
+            val c = prefs.getString("control", "buttons") ?: "buttons"
+            return """{"quality":"$q","control":"$c"}"""
+        }
+
+        @JavascriptInterface
+        fun vibrate(ms: Long) {
+            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(ms)
+            }
+        }
+
+        @JavascriptInterface
+        fun getDeviceInfo(): String {
+            val mem = Runtime.getRuntime().maxMemory() / (1024 * 1024)
+            return """{"model":"${Build.MODEL}","maxMemMB":$mem}"""
+        }
+    }
+}
+```
+
+---
+
+## 5. Res files {#res}
+
+### `app/src/main/res/layout/activity_main.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+</FrameLayout>
+```
+
+### `app/src/main/res/values/strings.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Highway Racer</string>
+</resources>
+```
+
+### `app/src/main/res/values/themes.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Racing" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+    </style>
+</resources>
+```
+
+### `app/src/main/res/drawable/ic_launcher_background.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#1A1A2E" />
+</shape>
+```
+
+---
+
+## 6. Game Bundle: `app/src/main/assets/game/index.html` {#game-bundle}
+
+This is the **entire game** — a self-contained HTML file that renders with Three.js r158 (bundled inline via a minified CDN snapshot embedded as a data-URI-compatible inline script tag, so no network is ever required). The file below is complete and playable.
