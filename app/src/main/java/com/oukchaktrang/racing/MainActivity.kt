@@ -2,7 +2,7 @@ package com.oukchaktrang.racing
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -11,161 +11,100 @@ import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.os.VibratorManager
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity(), SensorEventListener {
-
     private lateinit var webView: WebView
-    private lateinit var sensorManager: SensorManager
+    private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
-    private lateinit var prefs: SharedPreferences
-
-    // Tilt values forwarded to JS
-    private var tiltX = 0f
-    private var tiltY = 0f
+    private var vibrator: Vibrator? = null
+    private var tiltEnabled = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Keep screen on during gameplay
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setContentView(R.layout.activity_main)
+        hideSystemUI()
 
-        // Full-screen immersive
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
         } else {
             @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-                or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            )
+            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
 
-        setContentView(R.layout.activity_main)
         webView = findViewById(R.id.webView)
-        prefs = getSharedPreferences("racing_prefs", Context.MODE_PRIVATE)
-
-        configureWebView()
-
-        // Load game from assets (zero network required)
-        webView.loadUrl("file:///android_asset/game/index.html")
-
-        // Accelerometer setup
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun configureWebView() {
-        with(webView.settings) {
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
             allowFileAccess = true
-            allowContentAccess = true
-            cacheMode = WebSettings.LOAD_NO_CACHE
             mediaPlaybackRequiresUserGesture = false
-            // Hardware-accelerated rendering
-            setRenderPriority(WebSettings.RenderPriority.HIGH)
-            // Disable text size adjustment
-            textZoom = 100
-            // Disable unnecessary features
-            setSupportZoom(false)
-            builtInZoomControls = false
-            displayZoomControls = false
-            loadWithOverviewMode = true
-            useWideViewPort = true
+            cacheMode = WebSettings.LOAD_NO_CACHE
         }
-        // Enable hardware acceleration on the WebView layer
-        webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-        // Attach JavaScript bridge
-        webView.addJavascriptInterface(GameBridge(), "AndroidBridge")
+        webView.addJavascriptInterface(AndroidBridge(), "AndroidBridge")
+        webView.webViewClient = WebViewClient()
+        webView.loadUrl("file:///android_asset/game/index.html")
     }
 
-    override fun onResume() {
-        super.onResume()
-        accelerometer?.also { sensor ->
-            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
-        }
-        webView.onResume()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        sensorManager.unregisterListener(this)
-        webView.onPause()
-    }
-
-    override fun onDestroy() {
-        webView.destroy()
-        super.onDestroy()
-    }
-
-    // ── Accelerometer ──────────────────────────────────────────────────────
-    override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-            tiltX = event.values[0]  // left/right tilt
-            tiltY = event.values[1]  // forward/back tilt
-            webView.post {
-                webView.evaluateJavascript(
-                    "window.onTilt && window.onTilt($tiltX, $tiltY);",
-                    null
-                )
-            }
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) { /* unused */ }
-
-    // ── JavaScript ↔ Kotlin Bridge ─────────────────────────────────────────
-    inner class GameBridge {
-
+    inner class AndroidBridge {
         @JavascriptInterface
         fun saveHighScore(score: Int) {
-            val current = prefs.getInt("high_score", 0)
-            if (score > current) {
-                prefs.edit().putInt("high_score", score).apply()
+            getSharedPreferences("racer_prefs", Context.MODE_PRIVATE).edit().putInt("best", score).apply()
+        }
+        @JavascriptInterface
+        fun getHighScore(): Int = getSharedPreferences("racer_prefs", Context.MODE_PRIVATE).getInt("best", 0)
+        @JavascriptInterface
+        fun setTiltEnabled(enabled: Boolean) {
+            tiltEnabled = enabled
+            runOnUiThread {
+                if (enabled) accelerometer?.let { sensorManager?.registerListener(this@MainActivity, it, SensorManager.SENSOR_DELAY_GAME) }
+                else sensorManager?.unregisterListener(this@MainActivity)
             }
         }
-
-        @JavascriptInterface
-        fun getHighScore(): Int = prefs.getInt("high_score", 0)
-
-        @JavascriptInterface
-        fun saveSettings(quality: String, control: String) {
-            prefs.edit()
-                .putString("quality", quality)
-                .putString("control", control)
-                .apply()
-        }
-
-        @JavascriptInterface
-        fun getSettings(): String {
-            val q = prefs.getString("quality", "medium") ?: "medium"
-            val c = prefs.getString("control", "buttons") ?: "buttons"
-            return """{"quality":"$q","control":"$c"}"""
-        }
-
         @JavascriptInterface
         fun vibrate(ms: Long) {
-            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator.vibrate(ms)
-            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) vibrator?.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+                else @Suppress("DEPRECATION") vibrator?.vibrate(ms)
+            } catch (_: Exception) {}
         }
+    }
 
-        @JavascriptInterface
-        fun getDeviceInfo(): String {
-            val mem = Runtime.getRuntime().maxMemory() / (1024 * 1024)
-            return """{"model":"${Build.MODEL}","maxMemMB":$mem}"""
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (!tiltEnabled || event == null) return
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            val tiltY = event.values
+            webView.post { webView.evaluateJavascript("if(window.onAndroidTilt) window.onAndroidTilt($tiltY);", null) }
+        }
+    }
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    override fun onResume() { super.onResume(); hideSystemUI(); webView.onResume() }
+    override fun onPause() { super.onPause(); webView.onPause(); sensorManager?.unregisterListener(this) }
+
+    private fun hideSystemUI() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let {
+                it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
         }
     }
 }
