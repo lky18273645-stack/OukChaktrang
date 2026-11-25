@@ -1,58 +1,171 @@
-name: Build Highway Racer APK
+package com.oukchaktrang.racing
 
-on:
-  push:
-  workflow_dispatch:
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.SharedPreferences
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.Build
+import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.view.WindowManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebSettings
+import android.webkit.WebView
+import androidx.appcompat.app.AppCompatActivity
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+class MainActivity : AppCompatActivity(), SensorEventListener {
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+    private lateinit var webView: WebView
+    private lateinit var sensorManager: SensorManager
+    private var accelerometer: Sensor? = null
+    private lateinit var prefs: SharedPreferences
 
-      - name: Set up Gradle 8.4
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.4'
+    // Tilt values forwarded to JS
+    private var tiltX = 0f
+    private var tiltY = 0f
 
-      - name: Prepare assets (Three.js, fix minus signs, icons)
-        run: |
-          mkdir -p app/src/main/assets/game
-          curl -fsSL "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" \
-            -o app/src/main/assets/game/three.min.js
-          sed -i 's/−/-/g' app/src/main/assets/game/index.html
-          python3 - <<'EOF'
-          import struct, zlib, os
-          def make_png(w, h, r, g, b):
-              def chunk(t, d):
-                  return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
-              ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
-              raw = b''.join(b'\x00' + bytes([r, g, b] * w) for _ in range(h))
-              return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
-          sizes = {'mipmap-mdpi': 48, 'mipmap-hdpi': 72, 'mipmap-xhdpi': 96, 'mipmap-xxhdpi': 144, 'mipmap-xxxhdpi': 192}
-          for folder, sz in sizes.items():
-              path = 'app/src/main/res/' + folder
-              os.makedirs(path, exist_ok=True)
-              png = make_png(sz, sz, 0, 136, 255)
-              for name in ['ic_launcher.png', 'ic_launcher_round.png']:
-                  with open(path + '/' + name, 'wb') as f:
-                      f.write(png)
-          print("Icons generated")
-          EOF
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
 
-      - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        // Keep screen on during gameplay
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: HighwayRacer-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
-          retention-days: 30
+        // Full-screen immersive
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            )
+        }
+
+        setContentView(R.layout.activity_main)
+        webView = findViewById(R.id.webView)
+        prefs = getSharedPreferences("racing_prefs", Context.MODE_PRIVATE)
+
+        configureWebView()
+
+        // Load game from assets (zero network required)
+        webView.loadUrl("file:///android_asset/game/index.html")
+
+        // Accelerometer setup
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun configureWebView() {
+        with(webView.settings) {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = true
+            allowContentAccess = true
+            cacheMode = WebSettings.LOAD_NO_CACHE
+            mediaPlaybackRequiresUserGesture = false
+            // Hardware-accelerated rendering
+            setRenderPriority(WebSettings.RenderPriority.HIGH)
+            // Disable text size adjustment
+            textZoom = 100
+            // Disable unnecessary features
+            setSupportZoom(false)
+            builtInZoomControls = false
+            displayZoomControls = false
+            loadWithOverviewMode = true
+            useWideViewPort = true
+        }
+        // Enable hardware acceleration on the WebView layer
+        webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+        // Attach JavaScript bridge
+        webView.addJavascriptInterface(GameBridge(), "AndroidBridge")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        accelerometer?.also { sensor ->
+            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        }
+        webView.onResume()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sensorManager.unregisterListener(this)
+        webView.onPause()
+    }
+
+    override fun onDestroy() {
+        webView.destroy()
+        super.onDestroy()
+    }
+
+    // ── Accelerometer ──────────────────────────────────────────────────────
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            tiltX = event.values[0]  // left/right tilt
+            tiltY = event.values[1]  // forward/back tilt
+            webView.post {
+                webView.evaluateJavascript(
+                    "window.onTilt && window.onTilt($tiltX, $tiltY);",
+                    null
+                )
+            }
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) { /* unused */ }
+
+    // ── JavaScript ↔ Kotlin Bridge ─────────────────────────────────────────
+    inner class GameBridge {
+
+        @JavascriptInterface
+        fun saveHighScore(score: Int) {
+            val current = prefs.getInt("high_score", 0)
+            if (score > current) {
+                prefs.edit().putInt("high_score", score).apply()
+            }
+        }
+
+        @JavascriptInterface
+        fun getHighScore(): Int = prefs.getInt("high_score", 0)
+
+        @JavascriptInterface
+        fun saveSettings(quality: String, control: String) {
+            prefs.edit()
+                .putString("quality", quality)
+                .putString("control", control)
+                .apply()
+        }
+
+        @JavascriptInterface
+        fun getSettings(): String {
+            val q = prefs.getString("quality", "medium") ?: "medium"
+            val c = prefs.getString("control", "buttons") ?: "buttons"
+            return """{"quality":"$q","control":"$c"}"""
+        }
+
+        @JavascriptInterface
+        fun vibrate(ms: Long) {
+            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(ms)
+            }
+        }
+
+        @JavascriptInterface
+        fun getDeviceInfo(): String {
+            val mem = Runtime.getRuntime().maxMemory() / (1024 * 1024)
+            return """{"model":"${Build.MODEL}","maxMemMB":$mem}"""
+        }
+    }
+}
