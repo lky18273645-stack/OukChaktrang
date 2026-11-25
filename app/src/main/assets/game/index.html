@@ -1,477 +1,189 @@
-# Highway Car Racing — Complete Android APK Project
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Highway Racer 3D</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #050811; font-family: 'Segoe UI', Roboto, sans-serif; color: #fff; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .screen { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 16px 24px; pointer-events: none; z-index: 10; }
+  .hidden { display: none !important; }
+  .interactive { pointer-events: auto; }
+  .top-bar { display: flex; justify-content: space-between; align-items: center; }
+  .badge { background: rgba(15, 23, 42, 0.78); border: 1px solid rgba(56, 189, 248, 0.4); padding: 6px 14px; border-radius: 10px; backdrop-filter: blur(6px); }
+  .score-val { font-size: 22px; font-weight: 800; color: #38bdf8; letter-spacing: 1px; }
+  .sub-lbl { font-size: 11px; color: #94a3b8; text-transform: uppercase; }
+  .combo-pop { color: #fbbf24; font-weight: 800; font-size: 18px; text-shadow: 0 0 10px rgba(251,191,36,0.7); transition: transform 0.15s; }
+  #menuScreen { background: linear-gradient(90deg, rgba(5,8,17,0.92) 0%, rgba(5,8,17,0.45) 55%, rgba(5,8,17,0.85) 100%); pointer-events: auto; }
+  .menu-grid { display: flex; justify-content: space-between; align-items: center; height: 100%; gap: 16px; }
+  .panel { background: rgba(15, 23, 42, 0.82); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 14px; padding: 14px; width: 290px; max-height: 88vh; overflow-y: auto; }
+  h1 { font-size: 24px; font-weight: 900; background: linear-gradient(90deg, #38bdf8, #f43f5e); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 4px; }
+  .car-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 10px 0; }
+  .car-btn { background: rgba(30, 41, 59, 0.9); border: 1px solid #334155; color: #e2e8f0; padding: 8px 6px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; text-align: center; }
+  .car-btn.active { border-color: #38bdf8; background: rgba(56, 189, 248, 0.2); color: #fff; }
+  .colors { display: flex; gap: 8px; margin: 8px 0 12px; justify-content: center; }
+  .swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; }
+  .stat-row { margin-bottom: 6px; font-size: 11px; }
+  .bar-bg { height: 6px; background: #1e293b; border-radius: 4px; overflow: hidden; margin-top: 2px; }
+  .bar-fill { height: 100%; background: linear-gradient(90deg, #38bdf8, #22d3ee); transition: width 0.25s; }
+  .opt-group { margin-bottom: 10px; }
+  .opt-title { font-size: 11px; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase; }
+  .seg-btns { display: flex; gap: 4px; }
+  .seg-btn { flex: 1; padding: 6px 4px; font-size: 11px; font-weight: 700; background: #1e293b; border: 1px solid #334155; color: #cbd5e1; border-radius: 6px; cursor: pointer; }
+  .seg-btn.active { background: #0284c7; border-color: #38bdf8; color: #fff; }
+  .play-btn { width: 100%; padding: 12px; font-size: 16px; font-weight: 900; letter-spacing: 1px; background: linear-gradient(90deg, #f43f5e, #e11d48); border: none; border-radius: 10px; color: #fff; cursor: pointer; box-shadow: 0 4px 15px rgba(244, 63, 94, 0.45); margin-top: 6px; }
+  .play-btn:active { transform: scale(0.97); }
+  .hud-bottom { display: flex; justify-content: space-between; align-items: flex-end; width: 100%; }
+  .ctrl-cluster { display: flex; gap: 14px; pointer-events: auto; }
+  .touch-btn { width: 68px; height: 68px; border-radius: 50%; background: rgba(15, 23, 42, 0.65); border: 2px solid rgba(56, 189, 248, 0.55); color: #fff; font-size: 22px; font-weight: 900; display: flex; align-items: center; justify-content: center; touch-action: none; }
+  .touch-btn:active, .touch-btn.pressed { background: rgba(56, 189, 248, 0.45); transform: scale(0.94); }
+  .btn-nitro { border-color: #f59e0b; color: #fbbf24; }
+  .btn-brake { border-color: #f43f5e; color: #fb7185; }
+  .speedo { text-align: center; background: rgba(15, 23, 42, 0.78); border: 1px solid rgba(56, 189, 248, 0.35); padding: 8px 18px; border-radius: 14px; }
+  .kmh { font-size: 28px; font-weight: 900; color: #fff; line-height: 1; }
+  .nitro-bar { width: 110px; height: 7px; background: #1e293b; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  #nitroFill { height: 100%; width: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); }
+  #wheelWrap { width: 115px; height: 115px; border-radius: 50%; border: 6px solid rgba(56, 189, 248, 0.75); position: relative; pointer-events: auto; touch-action: none; background: rgba(15,23,42,0.45); }
+  #wheelWrap::after { content: ''; position: absolute; top: 50%; left: 0; right: 0; height: 6px; background: rgba(56, 189, 248, 0.75); transform: translateY(-50%); }
+  #gameOverScreen { background: rgba(5, 8, 17, 0.85); align-items: center; justify-content: center; pointer-events: auto; }
+  .go-card { background: #0f172a; border: 1px solid #38bdf8; border-radius: 16px; padding: 24px 32px; text-align: center; width: 320px; }
+</style>
+</head>
+<body>
+<canvas id="glCanvas"></canvas>
+<div id="menuScreen" class="screen">
+  <div class="menu-grid">
+    <div class="panel">
+      <h1>HIGHWAY RACER</h1>
+      <div class="sub-lbl">Best Score: <span id="menuBest" style="color:#fbbf24;font-weight:800;">0</span></div>
+      <div class="car-list" id="carList"></div>
+      <div class="colors" id="colorList"></div>
+      <div class="stat-row">Top Speed <div class="bar-bg"><div id="statSpeed" class="bar-fill"></div></div></div>
+      <div class="stat-row">Acceleration <div class="bar-bg"><div id="statAccel" class="bar-fill"></div></div></div>
+      <div class="stat-row">Handling <div class="bar-bg"><div id="statHandle" class="bar-fill"></div></div></div>
+    </div>
+    <div class="panel">
+      <div class="opt-group">
+        <div class="opt-title">Graphics Quality (Dimensity 6300)</div>
+        <div class="seg-btns" id="gfxBtns">
+          <button class="seg-btn" data-val="low">Low</button>
+          <button class="seg-btn active" data-val="medium">Med-High</button>
+          <button class="seg-btn" data-val="high">High</button>
+        </div>
+      </div>
+      <div class="opt-group">
+        <div class="opt-title">Controls</div>
+        <div class="seg-btns" id="ctrlBtns">
+          <button class="seg-btn active" data-val="buttons">Buttons</button>
+          <button class="seg-btn" data-val="wheel">Wheel</button>
+          <button class="seg-btn" data-val="tilt">Tilt</button>
+        </div>
+      </div>
+      <div class="opt-group">
+        <div class="opt-title">Time of Day</div>
+        <div class="seg-btns" id="timeBtns">
+          <button class="seg-btn active" data-val="day">Day</button>
+          <button class="seg-btn" data-val="sunset">Sunset</button>
+          <button class="seg-btn" data-val="night">Night</button>
+        </div>
+      </div>
+      <button class="play-btn" id="startBtn">RACE NOW</button>
+    </div>
+  </div>
+</div>
+<div id="hudScreen" class="screen hidden">
+  <div class="top-bar">
+    <div class="badge"><div class="sub-lbl">Score</div><div class="score-val" id="hudScore">0</div></div>
+    <div id="comboText" class="combo-pop"></div>
+    <div class="badge interactive" id="pauseBtn" style="cursor:pointer;font-weight:800;">II PAUSE</div>
+  </div>
+  <div class="hud-bottom">
+    <div id="leftControls" class="ctrl-cluster"><div class="touch-btn" id="btnLeft">◀</div><div class="touch-btn" id="btnRight">▶</div></div>
+    <div id="wheelWrap" class="hidden"></div>
+    <div class="speedo"><div class="kmh" id="hudSpeed">0</div><div class="sub-lbl">KM/H</div><div class="nitro-bar"><div id="nitroFill"></div></div></div>
+    <div class="ctrl-cluster"><div class="touch-btn btn-brake" id="btnBrake">BRK</div><div class="touch-btn btn-nitro" id="btnNitro">N2O</div></div>
+  </div>
+</div>
+<div id="gameOverScreen" class="screen hidden">
+  <div class="go-card">
+    <h2 style="color:#f43f5e;font-size:26px;margin-bottom:8px;">CRASHED!</h2>
+    <div class="sub-lbl">Final Score</div>
+    <div id="goScore" style="font-size:32px;font-weight:900;color:#38bdf8;margin:4px 0 12px;">0</div>
+    <div class="sub-lbl" style="margin-bottom:16px;">High Score: <span id="goBest" style="color:#fbbf24;">0</span></div>
+    <button class="play-btn" id="restartBtn">DRIVE AGAIN</button>
+    <button class="seg-btn" id="homeBtn" style="width:100%;margin-top:8px;padding:10px;">GARAGE</button>
+  </div>
+</div>
+<script src="three.min.js"></script>
+<script>
+(function() {
+  const Bridge = window.AndroidBridge || null;
+  function getSavedScore() { return (Bridge && Bridge.getHighScore) ? Bridge.getHighScore() : parseInt(localStorage.getItem('hr_best') || '0', 10); }
+  function saveScore(s) { if (Bridge && Bridge.saveHighScore) Bridge.saveHighScore(s); localStorage.setItem('hr_best', String(s)); }
+  function setNativeTilt(on) { if (Bridge && Bridge.setTiltEnabled) Bridge.setTiltEnabled(on); }
+  function haptic(ms) { if (Bridge && Bridge.vibrate) Bridge.vibrate(ms); }
 
-> **Target device:** Redmi 15C 5G (MediaTek Dimensity 6300, ~2.3 GB available RAM)  
-> **APK size target:** < 20 MB  
-> **Target FPS:** Locked 60 FPS  
-> **Build system:** Gradle + GitHub Actions (Java 17)  
-> **Engine:** Android WebView + Three.js (hardware-accelerated, no external asset downloads)
-
----
-
-## Table of Contents
-1. [Complete File Tree](#file-tree)
-2. [Root-level Gradle files](#root-gradle)
-3. [App-level Gradle + Manifest](#app-gradle)
-4. [MainActivity.kt](#mainactivity)
-5. [Game HTML/JS Bundle (Three.js engine)](#game-bundle)
-6. [Res: layouts, values, drawable](#res)
-7. [GitHub Actions Workflow](#github-actions)
-8. [Push Instructions](#push-instructions)
-
----
-
-## 1. Complete File Tree {#file-tree}
-
-```
-OukChaktrang/
-├── .github/
-│   └── workflows/
-│       └── build-racing-apk.yml
-├── app/
-│   ├── build.gradle
-│   ├── proguard-rules.pro
-│   └── src/
-│       └── main/
-│           ├── AndroidManifest.xml
-│           ├── java/
-│           │   └── com/
-│           │       └── oukchaktrang/
-│           │           └── racing/
-│           │               └── MainActivity.kt
-│           ├── assets/
-│           │   └── game/
-│           │       └── index.html          ← entire Three.js game (self-contained)
-│           └── res/
-│               ├── layout/
-│               │   └── activity_main.xml
-│               ├── values/
-│               │   ├── strings.xml
-│               │   └── themes.xml
-│               └── drawable/
-│                   └── ic_launcher_background.xml
-├── build.gradle
-├── gradle.properties
-├── settings.gradle
-└── gradlew / gradlew.bat / gradle/wrapper/
-```
-
----
-
-## 2. Root-level Gradle Files {#root-gradle}
-
-### `build.gradle` (project root)
-
-```groovy
-// Top-level build file
-plugins {
-    id 'com.android.application' version '8.2.2' apply false
-    id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+  let audioCtx = null, engineOsc = null, engineGain = null;
+  function initAudio() {
+    if (audioCtx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audioCtx = new AC();
+    engineOsc = audioCtx.createOscillator();
+    engineGain = audioCtx.createGain();
+    engineOsc.type = 'sawtooth';
+    engineOsc.frequency.value = 55;
+    engineGain.gain.value = 0.0;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass'; filter.frequency.value = 320;
+    engineOsc.connect(filter); filter.connect(engineGain); engineGain.connect(audioCtx.destination);
+    engineOsc.start();
+  }
+renderer.render(scene, camera); return;
 }
-```
-
-### `settings.gradle`
-
-```groovy
-pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
+if (playerCar) playerCar.rotation.y = 0;
+const spec = CARS[state.carIdx];
+const usingNitro = state.nitroActive && state.nitro > 2 && !state.braking;
+state.nitro = usingNitro ? Math.max(0, state.nitro - 28 * dt) : Math.min(100, state.nitro + 9 * dt);
+const maxSpd = spec.speed * (usingNitro ? 1.28 : 1.0);
+if (state.braking) state.speed = Math.max(45, state.speed - 190 * dt);
+else if (state.speed < maxSpd) state.speed = Math.min(maxSpd, state.speed + (45 + spec.accel * 65) * (usingNitro ? 1.6 : 1) * dt);
+else state.speed -= 50 * dt;
+const targetFov = usingNitro ? 74 : (60 + (state.speed / 350) * 8);
+camera.fov += (targetFov - camera.fov) * 6 * dt; camera.updateProjectionMatrix();
+let steer = state.control === 'buttons' ? ((rightHeld ? 1 : 0) - (leftHeld ? 1 : 0)) : (state.control === 'wheel' ? wheelAngle : tiltSteer);
+state.laneX = Math.max(-ROAD_WIDTH / 2 + 1.1, Math.min(ROAD_WIDTH / 2 - 1.1, state.laneX + steer * (8.5 + spec.handle * 5.5) * dt));
+if (playerCar) { playerCar.position.x = state.laneX; playerCar.rotation.z = -steer * 0.08; }
+camera.position.x += (state.laneX * 0.55 - camera.position.x) * 8 * dt;
+const worldVel = (state.speed / 3.6) * 1.45;
+roadPool.forEach(seg => { seg.position.z += worldVel * dt; if (seg.position.z > SEG_LEN) seg.position.z -= SEG_LEN * SEG_COUNT; });
+propPool.forEach(m => { m.position.z += worldVel * dt; if (m.position.z > 20) m.position.z -= 16 * 18; });
+const pHalfW = spec.w * 0.44, pHalfL = spec.l * 0.45;
+trafficPool.forEach(t => {
+t.mesh.position.z += (worldVel - (t.speed / 3.6) * 1.45) * dt;
+if (Math.random() < 0.004 && t.mesh.position.z < -35) { const nextL = t.lane + (Math.random() < 0.5 ? -1 : 1); if (nextL >= 0 && nextL < 4) t.targetLane = nextL; }
+const targetX = LANES[t.targetLane]; t.mesh.position.x += (targetX - t.mesh.position.x) * 3.5 * dt;
+if (Math.abs(targetX - t.mesh.position.x) < 0.1) t.lane = t.targetLane;
+const dz = Math.abs(t.mesh.position.z), dx = Math.abs(t.mesh.position.x - state.laneX);
+if (dz < (pHalfL + t.l * 0.44) && dx < (pHalfW + t.w * 0.43)) triggerCrash();
+else if (!t.nearMissed && t.mesh.position.z > 0 && t.mesh.position.z < 5 && dx < (pHalfW + t.w * 0.5 + 1.15)) {
+t.nearMissed = true; state.score += 150; playBonusSFX(); haptic(35); showCombo('NEAR MISS! +150');
 }
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-    }
+if (t.mesh.position.z > 18) { t.lane = Math.floor(Math.random() * 4); t.targetLane = t.lane; t.speed = 68 + Math.random() * 65; t.nearMissed = false; t.mesh.position.set(LANES[t.lane], 0, -170 - Math.random() * 70); }
+});
+state.score += (state.speed * dt) * 0.25;
+document.getElementById('hudScore').textContent = Math.floor(state.score);
+document.getElementById('hudSpeed').textContent = Math.floor(state.speed);
+document.getElementById('nitroFill').style.width = state.nitro + '%';
+updateEngineSound(state.speed / 330, true);
+renderer.render(scene, camera);
 }
-rootProject.name = 'OukChaktrang'
-include ':app'
-```
+window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+document.getElementById('menuBest').textContent = state.best;
+updateStatsUI(); applyTheme('day'); rebuildPlayerCar(); requestAnimationFrame(animate);
+})();
 
-### `gradle.properties`
 
-```properties
-org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-org.gradle.parallel=true
-org.gradle.caching=true
-android.useAndroidX=true
-kotlin.code.style=official
-android.nonTransitiveRClass=true
-```
 
-### `gradle/wrapper/gradle-wrapper.properties`
-
-```properties
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-```
-
----
-
-## 3. App-level Gradle + Manifest {#app-gradle}
-
-### `app/build.gradle`
-
-```groovy
-plugins {
-    id 'com.android.application'
-    id 'org.jetbrains.kotlin.android'
-}
-
-android {
-    namespace 'com.oukchaktrang.racing'
-    compileSdk 34
-
-    defaultConfig {
-        applicationId 'com.oukchaktrang.racing'
-        minSdk 24
-        targetSdk 34
-        versionCode 1
-        versionName '1.0.0'
-
-        // Keep APK small — no ABI splits needed for WebView-only app
-        ndk {
-            abiFilters 'arm64-v8a', 'armeabi-v7a'
-        }
-    }
-
-    buildTypes {
-        release {
-            minifyEnabled true
-            shrinkResources true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // Self-signed debug key so GitHub Actions can produce a runnable APK
-            // without needing a keystore secret for the first build.
-            signingConfig signingConfigs.debug
-        }
-        debug {
-            applicationIdSuffix '.debug'
-            debuggable true
-        }
-    }
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = '17'
-    }
-
-    // Merge assets from the assets folder cleanly
-    sourceSets {
-        main {
-            assets.srcDirs = ['src/main/assets']
-        }
-    }
-
-    packagingOptions {
-        resources {
-            excludes += '/META-INF/{AL2.0,LGPL2.1}'
-        }
-    }
-}
-
-dependencies {
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    // No other dependencies — entire game runs in WebView
-}
-```
-
-### `app/proguard-rules.pro`
-
-```
-# Keep WebView JavaScript interface
--keepclassmembers class com.oukchaktrang.racing.** {
-    @android.webkit.JavascriptInterface <methods>;
-}
--keep class com.oukchaktrang.racing.GameBridge { *; }
-```
-
-### `app/src/main/AndroidManifest.xml`
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <!-- No internet permission needed — 100% offline -->
-    <uses-permission android:name="android.permission.VIBRATE" />
-
-    <!-- Declare required hardware features as optional so it installs on all devices -->
-    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
-    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
-
-    <application
-        android:allowBackup="true"
-        android:hardwareAccelerated="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.Racing"
-        android:largeHeap="false">
-
-        <activity
-            android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:exported="true"
-            android:immersive="true"
-            android:screenOrientation="landscape"
-            android:windowSoftInputMode="stateHidden|adjustNothing">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-    </application>
-
-</manifest>
-```
-
----
-
-## 4. MainActivity.kt {#mainactivity}
-
-### `app/src/main/java/com/oukchaktrang/racing/MainActivity.kt`
-
-```kotlin
-package com.oukchaktrang.racing
-
-import android.annotation.SuppressLint
-import android.content.Context
-import android.content.SharedPreferences
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
-import android.os.Build
-import android.os.Bundle
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.view.WindowManager
-import android.webkit.JavascriptInterface
-import android.webkit.WebSettings
-import android.webkit.WebView
-import androidx.appcompat.app.AppCompatActivity
-
-class MainActivity : AppCompatActivity(), SensorEventListener {
-
-    private lateinit var webView: WebView
-    private lateinit var sensorManager: SensorManager
-    private var accelerometer: Sensor? = null
-    private lateinit var prefs: SharedPreferences
-
-    // Tilt values forwarded to JS
-    private var tiltX = 0f
-    private var tiltY = 0f
-
-    @SuppressLint("SetJavaScriptEnabled")
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        // Keep screen on during gameplay
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-        // Full-screen immersive
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
-        } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-                or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            )
-        }
-
-        setContentView(R.layout.activity_main)
-        webView = findViewById(R.id.webView)
-        prefs = getSharedPreferences("racing_prefs", Context.MODE_PRIVATE)
-
-        configureWebView()
-
-        // Load game from assets (zero network required)
-        webView.loadUrl("file:///android_asset/game/index.html")
-
-        // Accelerometer setup
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun configureWebView() {
-        with(webView.settings) {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            allowFileAccess = true
-            allowContentAccess = true
-            cacheMode = WebSettings.LOAD_NO_CACHE
-            mediaPlaybackRequiresUserGesture = false
-            // Hardware-accelerated rendering
-            setRenderPriority(WebSettings.RenderPriority.HIGH)
-            // Disable text size adjustment
-            textZoom = 100
-            // Disable unnecessary features
-            setSupportZoom(false)
-            builtInZoomControls = false
-            displayZoomControls = false
-            loadWithOverviewMode = true
-            useWideViewPort = true
-        }
-        // Enable hardware acceleration on the WebView layer
-        webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-        // Attach JavaScript bridge
-        webView.addJavascriptInterface(GameBridge(), "AndroidBridge")
-    }
-
-    override fun onResume() {
-        super.onResume()
-        accelerometer?.also { sensor ->
-            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
-        }
-        webView.onResume()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        sensorManager.unregisterListener(this)
-        webView.onPause()
-    }
-
-    override fun onDestroy() {
-        webView.destroy()
-        super.onDestroy()
-    }
-
-    // ── Accelerometer ──────────────────────────────────────────────────────
-    override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-            tiltX = event.values[0]  // left/right tilt
-            tiltY = event.values[1]  // forward/back tilt
-            webView.post {
-                webView.evaluateJavascript(
-                    "window.onTilt && window.onTilt($tiltX, $tiltY);",
-                    null
-                )
-            }
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) { /* unused */ }
-
-    // ── JavaScript ↔ Kotlin Bridge ─────────────────────────────────────────
-    inner class GameBridge {
-
-        @JavascriptInterface
-        fun saveHighScore(score: Int) {
-            val current = prefs.getInt("high_score", 0)
-            if (score > current) {
-                prefs.edit().putInt("high_score", score).apply()
-            }
-        }
-
-        @JavascriptInterface
-        fun getHighScore(): Int = prefs.getInt("high_score", 0)
-
-        @JavascriptInterface
-        fun saveSettings(quality: String, control: String) {
-            prefs.edit()
-                .putString("quality", quality)
-                .putString("control", control)
-                .apply()
-        }
-
-        @JavascriptInterface
-        fun getSettings(): String {
-            val q = prefs.getString("quality", "medium") ?: "medium"
-            val c = prefs.getString("control", "buttons") ?: "buttons"
-            return """{"quality":"$q","control":"$c"}"""
-        }
-
-        @JavascriptInterface
-        fun vibrate(ms: Long) {
-            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator.vibrate(ms)
-            }
-        }
-
-        @JavascriptInterface
-        fun getDeviceInfo(): String {
-            val mem = Runtime.getRuntime().maxMemory() / (1024 * 1024)
-            return """{"model":"${Build.MODEL}","maxMemMB":$mem}"""
-        }
-    }
-}
-```
-
----
-
-## 5. Res files {#res}
-
-### `app/src/main/res/layout/activity_main.xml`
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<FrameLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="#000000">
-
-    <WebView
-        android:id="@+id/webView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-</FrameLayout>
-```
-
-### `app/src/main/res/values/strings.xml`
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Highway Racer</string>
-</resources>
-```
-
-### `app/src/main/res/values/themes.xml`
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="Theme.Racing" parent="Theme.AppCompat.NoActionBar">
-        <item name="android:windowFullscreen">true</item>
-        <item name="android:windowBackground">@android:color/black</item>
-        <item name="android:statusBarColor">@android:color/black</item>
-        <item name="android:navigationBarColor">@android:color/black</item>
-    </style>
-</resources>
-```
-
-### `app/src/main/res/drawable/ic_launcher_background.xml`
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android">
-    <solid android:color="#1A1A2E" />
-</shape>
-```
-
----
-
-## 6. Game Bundle: `app/src/main/assets/game/index.html` {#game-bundle}
-
-This is the **entire game** — a self-contained HTML file that renders with Three.js r158 (bundled inline via a minified CDN snapshot embedded as a data-URI-compatible inline script tag, so no network is ever required). The file below is complete and playable.
