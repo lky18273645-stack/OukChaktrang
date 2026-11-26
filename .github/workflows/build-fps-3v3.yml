@@ -1,0 +1,51 @@
+name: Build FPS 3v3 APK
+
+on:
+  push:
+    branches: [fps-3v3]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fps-3v3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Install Android SDK packages
+        run: yes | sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Bundle three.js locally (runtime stays 100% offline)
+        run: |
+          curl -fsSL -o app/src/main/assets/three.min.js https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js
+          test -s app/src/main/assets/three.min.js
+          head -c 120 app/src/main/assets/three.min.js
+
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version 8.9
+
+      - name: Gradle wrapper permissions
+        run: chmod +x gradlew
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FPS3v3-debug-apk
+          path: fps-3v3/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
